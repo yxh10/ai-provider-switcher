@@ -109,7 +109,7 @@ body {
 .active-banner {
   margin: 16px 24px 0;
   padding: 16px 20px;
-  background: linear-gradient(135deg, var(--accent-glow), transparent 60%);
+  background: var(--accent-glow);
   border: 1px solid var(--border-light);
   border-radius: var(--radius);
   display: flex;
@@ -206,8 +206,6 @@ body {
   border-radius: var(--radius);
   padding: 16px 20px;
   transition: all 0.18s ease;
-  position: relative;
-  overflow: hidden;
 }
 
 .provider-card:hover {

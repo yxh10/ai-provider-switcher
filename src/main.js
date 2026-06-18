@@ -28,7 +28,7 @@ async function refresh() {
   try {
     currentSnapshot = await invoke("get_config");
     document.getElementById("configPath").textContent =
-      currentSnapshot.config_path.replace(/^\/Users\/[^/]+/, "~");
+      shortenPath(currentSnapshot.config_path);
     renderActiveBanner(currentSnapshot);
     renderProviders(currentSnapshot);
   } catch (err) {
@@ -120,7 +120,7 @@ function providerCardHTML(p) {
         </div>
       </div>
       <div class="provider-card-body">
-        <div class="provider-model">${esc(p.id === p.name ? p.id : p.id + " / " + p.name)}</div>
+        <div class="provider-model">${esc(p.id)}</div>
         <div class="provider-url">${esc(p.base_url)}</div>
         <div class="provider-meta">
           <span class="provider-meta-item"><strong>wire_api:</strong> ${esc(p.wire_api)}</span>
@@ -222,7 +222,7 @@ function editFormHTML(p, isEdit) {
       <div class="form-row">
       <div class="form-group">
         <label class="form-label">Default Model</label>
-        <input class="form-input mono" id="formModel" value="${esc(currentSnapshot.active_model || "")}" placeholder="anthropic/claude-sonnet-4" />
+        <input class="form-input mono" id="formModel" value="${esc(p.is_active ? (currentSnapshot.active_model || "") : "")}" placeholder="anthropic/claude-sonnet-4" />
         <div class="form-hint">The exact model name your provider's API expects (e.g. <code>anthropic/claude-sonnet-4</code> for OpenRouter, <code>gpt-4o</code> for OpenAI, <code>qwen2.5-coder:32b</code> for Ollama).</div>
       </div>
         <div class="form-group">
@@ -450,6 +450,13 @@ function toast(message, type = "info") {
     el.style.animation = "toastOut 0.2s ease forwards";
     setTimeout(() => el.remove(), 200);
   }, 3000);
+}
+
+function shortenPath(path) {
+  return path
+    .replace(/^\/Users\/[^/]+/, "~")
+    .replace(/^[A-Z]:[\\/]Users[\\/][^\\/]+/i, "~")
+    .replace(/\\/g, "/");
 }
 
 function esc(s) {
