@@ -1,0 +1,25 @@
+{
+  "name": "codex-provider-manager",
+  "version": "1.0.0",
+  "description": "Cross-platform CLI to manage Codex model provider configs (~/.codex/config.toml) and API key env vars on macOS and Windows.",
+  "type": "commonjs",
+  "bin": {
+    "codex-provider-manager": "./index.js",
+    "cpm": "./index.js"
+  },
+  "scripts": {
+    "start": "node index.js",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@iarna/toml": "^2.2.5",
+    "prompts": "^2.4.2"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.11.2"
+  }
+}
