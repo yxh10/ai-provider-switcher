@@ -62,27 +62,69 @@ function renderProviders(snap) {
   const count = document.getElementById("providerCount");
   count.textContent = snap.providers.length > 0 ? `(${snap.providers.length})` : "";
 
+  const defaultCard = defaultCardHTML(!snap.active_provider);
+
   if (snap.providers.length === 0) {
-    list.innerHTML = `
-      <div class="empty-state">
-        <div class="empty-state-icon">
-          <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
-            <rect x="8" y="6" width="32" height="36" rx="4" stroke="currentColor" stroke-width="2"/>
-            <path d="M16 16h16M16 22h16M16 28h10" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-          </svg>
-        </div>
-        <div class="empty-state-text">No providers configured yet</div>
-        <div class="empty-state-hint">Click "Add Provider" to get started</div>
-      </div>
-    `;
+    list.innerHTML = defaultCard;
+    bindCardEvents(list);
     return;
   }
 
-  list.innerHTML = snap.providers.map((p) => providerCardHTML(p)).join("");
+  list.innerHTML = defaultCard + snap.providers.map((p) => providerCardHTML(p)).join("");
+  bindCardEvents(list);
+}
 
-  list.querySelectorAll("[data-action]").forEach((btn) => {
-    btn.addEventListener("click", handleCardAction);
+function bindCardEvents(list) {
+  list.querySelectorAll(".provider-card").forEach((card) => {
+    card.addEventListener("click", handleCardClick);
   });
+  list.querySelectorAll("[data-action]").forEach((btn) => {
+    if (btn.tagName === "BUTTON") {
+      btn.addEventListener("click", handleCardAction);
+    }
+  });
+}
+
+function handleCardClick(e) {
+  if (e.target.closest("button") || e.target.closest(".editing-card")) return;
+
+  const card = e.currentTarget;
+  const action = card.dataset.action;
+  const id = card.dataset.id;
+
+  if (action === "activate-default") {
+    invoke("reset_to_default")
+      .then(() => { toast("Switched to built-in default", "success"); refresh(); })
+      .catch((err) => toast("Failed: " + err, "error"));
+  } else if (action === "activate" && id) {
+    invoke("set_default", { input: { providerId: id } })
+      .then(() => {
+        const p = currentSnapshot.providers.find((p) => p.id === id);
+        toast(`${p?.name || id} is now the default`, "success");
+        refresh();
+      })
+      .catch((err) => toast("Failed: " + err, "error"));
+  }
+}
+
+function defaultCardHTML(isActive) {
+  const keyBadge = `<span class="badge badge-success">Built-in</span>`;
+
+  return `
+    <div class="provider-card ${isActive ? "active" : ""}" data-action="activate-default">
+      <div class="provider-card-top">
+        <span class="provider-dot"></span>
+        <span class="provider-name">Built-in Default</span>
+        <div class="provider-badges">
+          ${keyBadge}
+        </div>
+      </div>
+      <div class="provider-card-body">
+        <div class="provider-model">openai</div>
+        <div class="provider-url">Codex built-in OpenAI provider</div>
+      </div>
+    </div>
+  `;
 }
 
 function providerCardHTML(p) {
@@ -90,37 +132,28 @@ function providerCardHTML(p) {
     ? `<span class="badge badge-success">Key Set</span>`
     : `<span class="badge badge-danger">Key Missing</span>`;
 
-  const activeBadge = p.is_active
-    ? `<span class="badge badge-accent">Active</span>`
-    : "";
-
-  const setDefaultBtn = !p.is_active
-    ? `<button class="icon-btn" data-action="activate" data-id="${esc(p.id)}" title="Set as default">
-        <svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M8 2l2 4 4 .5-3 3 .8 4-3.8-2-3.8 2 .8-4-3-3 4-.5L8 2z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>
-       </button>`
-    : "";
-
   return `
-    <div class="provider-card ${p.is_active ? "active" : ""}" data-id="${esc(p.id)}">
+    <div class="provider-card ${p.is_active ? "active" : ""}" data-id="${esc(p.id)}" data-action="${p.is_active ? "" : "activate"}" data-id-attr="${esc(p.id)}">
       <div class="provider-card-top">
         <span class="provider-dot"></span>
         <span class="provider-name">${esc(p.name)}</span>
         <div class="provider-badges">
-          ${activeBadge}
           ${keyBadge}
         </div>
         <div class="provider-actions">
-          ${setDefaultBtn}
           <button class="icon-btn" data-action="edit" data-id="${esc(p.id)}" title="Edit">
-            <svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M11 2l3 3-8 8H3v-3l8-8z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M11 2l3 3-8 8H3v-3l8-8z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>
+          </button>
+          <button class="icon-btn" data-action="clone" data-id="${esc(p.id)}" title="Clone">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="5" y="5" width="9" height="9" rx="1.5" stroke="currentColor" stroke-width="1.3"/><path d="M11 3.5V3a1 1 0 00-1-1H3a1 1 0 00-1 1v7a1 1 0 001 1h.5" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>
           </button>
           <button class="icon-btn danger" data-action="remove" data-id="${esc(p.id)}" title="Remove">
-            <svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
           </button>
         </div>
       </div>
       <div class="provider-card-body">
-        <div class="provider-model">${esc(p.id)}</div>
+        <div class="provider-model">${esc(p.model || p.id)}</div>
         <div class="provider-url">${esc(p.base_url)}</div>
         <div class="provider-meta">
           <span class="provider-meta-item"><strong>wire_api:</strong> ${esc(p.wire_api)}</span>
@@ -134,47 +167,35 @@ function providerCardHTML(p) {
 function handleCardAction(e) {
   const btn = e.currentTarget;
   const action = btn.dataset.action;
+
+  if (action === "activate-default") {
+    invoke("reset_to_default")
+      .then(() => {
+        toast("Switched to built-in default", "success");
+        refresh();
+      })
+      .catch((err) => toast("Failed: " + err, "error"));
+    return;
+  }
+
   const id = btn.dataset.id;
   const provider = currentSnapshot.providers.find((p) => p.id === id);
   if (!provider) return;
 
-  if (action === "activate") showActivateModal(provider);
-  else if (action === "edit") showEditForm(provider);
+  if (action === "activate") {
+    invoke("set_default", { input: { providerId: provider.id } })
+      .then(() => {
+        toast(`${provider.name} is now the default`, "success");
+        refresh();
+      })
+      .catch((err) => toast("Failed: " + err, "error"));
+  } else if (action === "edit") showEditForm(provider);
+  else if (action === "clone") showEditForm(provider, true);
   else if (action === "remove") showRemoveConfirm(provider);
 }
 
-function showActivateModal(provider) {
-  showModal(`
-    <div class="modal-title">Set Default Provider</div>
-    <div class="confirm-text">
-      Switch the active provider to <strong>${esc(provider.name)}</strong>.<br>
-      Enter the model to use:
-    </div>
-    <div class="form-group" style="margin-bottom:16px">
-      <input class="form-input mono" id="activateModel" value="${esc(currentSnapshot.active_model || "")}" placeholder="e.g. anthropic/claude-sonnet-4" />
-    </div>
-    <div class="confirm-actions">
-      <button class="btn btn-secondary" onclick="hideModal()">Cancel</button>
-      <button class="btn btn-primary" id="confirmActivate">Set Active</button>
-    </div>
-  `);
-  document.getElementById("confirmActivate").addEventListener("click", async () => {
-    const model = document.getElementById("activateModel").value.trim();
-    if (!model) return toast("Model name is required", "error");
-    try {
-      await invoke("set_default", { input: { providerId: provider.id, model } });
-      hideModal();
-      toast(`${provider.name} is now the default`, "success");
-      await refresh();
-    } catch (err) {
-      toast("Failed: " + err, "error");
-    }
-  });
-  document.getElementById("activateModel").focus();
-}
-
-function showEditForm(provider) {
-  const isEdit = !!provider;
+function showEditForm(provider, isClone = false) {
+  const isEdit = !!provider && !isClone;
   const p = provider || {};
   const list = document.getElementById("providerList");
 
@@ -183,7 +204,7 @@ function showEditForm(provider) {
 
   const card = document.createElement("div");
   card.className = "provider-card editing editing-card";
-  card.innerHTML = editFormHTML(p, isEdit);
+  card.innerHTML = editFormHTML(p, isEdit, isClone);
 
   if (isEdit) {
     const target = list.querySelector(`[data-id="${p.id}"]`);
@@ -198,32 +219,34 @@ function showEditForm(provider) {
   card.querySelector("#formProviderId").focus();
 }
 
-function editFormHTML(p, isEdit) {
+function editFormHTML(p, isEdit, isClone) {
+  const title = isClone ? "Clone Provider" : isEdit ? "Edit Provider" : "Add New Provider";
+  const ac = 'autocapitalize="off" autocorrect="off" spellcheck="false"';
   return `
     <div class="edit-form">
       <div class="edit-form-title">
-        ${isEdit ? "Edit Provider" : "Add New Provider"}
+        ${title}
         <button class="modal-close" data-action="cancel"><svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>
       </div>
       <div class="form-row">
         <div class="form-group">
           <label class="form-label">Provider ID</label>
-          <input class="form-input mono" id="formProviderId" value="${esc(p.id || "")}" placeholder="openrouter" ${isEdit ? "disabled" : ""} />
+          <input class="form-input mono" id="formProviderId" value="${esc(isClone ? "" : p.id || "")}" placeholder="openrouter" ${isEdit ? "disabled" : ""} ${ac} />
         </div>
         <div class="form-group">
           <label class="form-label">Display Name</label>
-          <input class="form-input" id="formName" value="${esc(p.name || "")}" placeholder="OpenRouter" />
+          <input class="form-input" id="formName" value="${esc(p.name || "")}" placeholder="OpenRouter" ${ac} />
         </div>
       </div>
       <div class="form-group">
         <label class="form-label">Base URL</label>
-        <input class="form-input mono" id="formBaseUrl" value="${esc(p.base_url || "")}" placeholder="https://openrouter.ai/api/v1" />
+        <input class="form-input mono" id="formBaseUrl" value="${esc(p.base_url || "")}" placeholder="https://openrouter.ai/api/v1" ${ac} />
       </div>
       <div class="form-row">
       <div class="form-group">
         <label class="form-label">Default Model</label>
-        <input class="form-input mono" id="formModel" value="${esc(p.is_active ? (currentSnapshot.active_model || "") : "")}" placeholder="anthropic/claude-sonnet-4" />
-        <div class="form-hint">The exact model name your provider's API expects (e.g. <code>anthropic/claude-sonnet-4</code> for OpenRouter, <code>gpt-4o</code> for OpenAI, <code>qwen2.5-coder:32b</code> for Ollama).</div>
+        <input class="form-input mono" id="formModel" value="${esc(p.model || "")}" placeholder="anthropic/claude-sonnet-4" ${ac} />
+        <div class="form-hint">The exact model name your provider's API expects (e.g. <code>glm-4-7-251222</code> for HuoShan, <code>gpt-4o</code> for OpenAI).</div>
       </div>
         <div class="form-group">
           <label class="form-label">Wire API</label>
@@ -236,11 +259,11 @@ function editFormHTML(p, isEdit) {
       <div class="form-row">
         <div class="form-group">
           <label class="form-label">Env Var Name</label>
-          <input class="form-input mono" id="formEnvKey" value="${esc(p.env_key || "")}" placeholder="OPENROUTER_API_KEY" />
+          <input class="form-input mono" id="formEnvKey" value="${esc(p.env_key || "")}" placeholder="OPENROUTER_API_KEY" ${ac} />
         </div>
         <div class="form-group">
           <label class="form-label">API Key ${isEdit ? "(leave blank to keep existing)" : ""}</label>
-          <input class="form-input mono" id="formApiKey" type="password" placeholder="${isEdit ? "••••••••" : "sk-or-v1-..."}" />
+          <input class="form-input mono" id="formApiKey" type="password" placeholder="${isEdit ? "••••••••" : "sk-or-v1-..."}" ${ac} />
         </div>
       </div>
       <label class="form-check">
@@ -249,7 +272,7 @@ function editFormHTML(p, isEdit) {
       </label>
       <div class="form-actions">
         <button class="btn btn-secondary" data-action="cancel">Cancel</button>
-        <button class="btn btn-primary" data-action="save">${isEdit ? "Update" : "Save"} Provider</button>
+        <button class="btn btn-primary" data-action="save">${isClone ? "Clone" : isEdit ? "Update" : "Save"} Provider</button>
       </div>
     </div>
   `;

@@ -34,6 +34,7 @@ pub struct ProviderInfo {
     pub id: String,
     pub name: String,
     pub base_url: String,
+    pub model: String,
     pub env_key: String,
     pub wire_api: String,
     pub is_active: bool,
@@ -112,6 +113,22 @@ fn pick_rc_file() -> PathBuf {
     home.join(".zshrc")
 }
 
+fn is_env_key_set(env_key: &str) -> bool {
+    if std::env::var(env_key).is_ok() {
+        return true;
+    }
+    let rc_file = pick_rc_file();
+    if rc_file.exists() {
+        if let Ok(content) = fs::read_to_string(&rc_file) {
+            let pattern = format!("export {}=", env_key);
+            return content
+                .lines()
+                .any(|line| line.trim_start().starts_with(&pattern));
+        }
+    }
+    false
+}
+
 #[tauri::command]
 fn get_config() -> Result<ConfigSnapshot, String> {
     let config = read_config_toml()?;
@@ -137,7 +154,7 @@ fn get_config() -> Result<ConfigSnapshot, String> {
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string();
-                let is_env_set = std::env::var(&env_key).is_ok();
+                let is_env_set = is_env_key_set(&env_key);
 
                 providers.push(ProviderInfo {
                     id: id.clone(),
@@ -148,6 +165,11 @@ fn get_config() -> Result<ConfigSnapshot, String> {
                         .to_string(),
                     base_url: pt
                         .get("base_url")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    model: pt
+                        .get("model")
                         .and_then(|v| v.as_str())
                         .unwrap_or("")
                         .to_string(),
@@ -175,6 +197,7 @@ fn get_config() -> Result<ConfigSnapshot, String> {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct SaveProviderInput {
     id: String,
     name: String,
@@ -196,6 +219,7 @@ fn save_provider(input: SaveProviderInput) -> Result<(), String> {
     let mut pt = toml::value::Table::new();
     pt.insert("name".to_string(), toml::Value::String(input.name));
     pt.insert("base_url".to_string(), toml::Value::String(input.base_url));
+    pt.insert("model".to_string(), toml::Value::String(input.model.clone()));
     pt.insert("env_key".to_string(), toml::Value::String(input.env_key.clone()));
     pt.insert("wire_api".to_string(), toml::Value::String(input.wire_api));
     providers_table.insert(input.id.clone(), toml::Value::Table(pt));
@@ -215,9 +239,9 @@ fn save_provider(input: SaveProviderInput) -> Result<(), String> {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct SetDefaultInput {
     provider_id: String,
-    model: String,
 }
 
 #[tauri::command]
@@ -230,15 +254,38 @@ fn set_default(input: SetDefaultInput) -> Result<(), String> {
         .and_then(|v| v.as_table())
         .ok_or("No providers configured")?;
 
-    if !providers_table.contains_key(&input.provider_id) {
-        return Err(format!("Unknown provider: {}", input.provider_id));
-    }
+    let pt = providers_table
+        .get(&input.provider_id)
+        .and_then(|v| v.as_table())
+        .ok_or(format!("Unknown provider: {}", input.provider_id))?;
+
+    let model = pt
+        .get("model")
+        .and_then(|v| v.as_str())
+        .ok_or(format!(
+            "No model configured for provider: {}",
+            input.provider_id
+        ))?;
+
+    let model = model.to_string();
 
     root.insert(
         "model_provider".to_string(),
         toml::Value::String(input.provider_id),
     );
-    root.insert("model".to_string(), toml::Value::String(input.model));
+    root.insert("model".to_string(), toml::Value::String(model));
+
+    write_config_toml(&config)?;
+    Ok(())
+}
+
+#[tauri::command]
+fn reset_to_default() -> Result<(), String> {
+    let mut config = read_config_toml()?;
+    let root = config.as_table_mut().ok_or("Config root is not a table")?;
+
+    root.remove("model_provider");
+    root.remove("model");
 
     write_config_toml(&config)?;
     Ok(())
@@ -312,6 +359,8 @@ fn set_env_var(key: String, value: String) -> Result<(), String> {
     fs::write(&rc_file, new_content)
         .map_err(|e| format!("Failed to write {}: {}", rc_file.display(), e))?;
 
+    std::env::set_var(&key, &value);
+
     Ok(())
 }
 
@@ -330,7 +379,7 @@ fn get_env_status() -> Result<Vec<(String, bool)>, String> {
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string();
-                let is_set = std::env::var(&env_key).is_ok();
+                let is_set = is_env_key_set(&env_key);
                 result.push((id.clone(), is_set));
             }
         }
@@ -410,6 +459,7 @@ pub fn run() {
             save_provider,
             set_default,
             remove_provider,
+            reset_to_default,
             set_env_var,
             get_env_status,
             backup_config,

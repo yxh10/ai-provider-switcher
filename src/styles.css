@@ -206,6 +206,7 @@ body {
   border-radius: var(--radius);
   padding: 16px 20px;
   transition: all 0.18s ease;
+  cursor: pointer;
 }
 
 .provider-card:hover {
@@ -275,8 +276,8 @@ body {
 }
 
 .icon-btn {
-  width: 30px;
-  height: 30px;
+  width: 36px;
+  height: 36px;
   border: none;
   border-radius: var(--radius-sm);
   background: transparent;
