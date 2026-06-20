@@ -166,13 +166,35 @@ function bold(s) {
   return `\x1b[1m${s}\x1b[0m`;
 }
 
+const PROVIDER_PRESETS = [
+  { title: "Custom (fill in manually)", value: null },
+  {
+    title: "HuoShan GLM 5.2 — Volcano Engine (Responses API)",
+    value: { id: "huoshan", name: "HuoShan GLM 5.2", baseUrl: "https://ark.cn-beijing.volces.com/api/coding/v3", model: "glm-latest", envKey: "HUOSHAN_API_KEY", wireApi: "responses" },
+  },
+  {
+    title: "OpenCode Go — glm-5.2 (Chat Completions)",
+    value: { id: "opencode-go", name: "OpenCode Go", baseUrl: "https://opencode.ai/zen/go/v1", model: "glm-5.2", envKey: "OPENCODE_GO_API_KEY", wireApi: "chat" },
+  },
+];
+
 async function cmdAdd() {
+  const presetChoice = await prompts({
+    type: "select",
+    name: "preset",
+    message: "Choose a provider preset",
+    choices: PROVIDER_PRESETS,
+    initial: 0,
+  });
+  if (!presetChoice) return;
+  const preset = presetChoice.preset || null;
+
   const answers = await prompts([
-    { type: "text", name: "providerId", message: "Provider ID", initial: "openrouter", validate: (v) => (v.trim() ? true : "Required") },
-    { type: "text", name: "providerName", message: "Provider display name", initial: "OpenRouter" },
-    { type: "text", name: "baseUrl", message: "Base URL", initial: "https://openrouter.ai/api/v1" },
-    { type: "text", name: "model", message: "Default model", initial: "anthropic/claude-sonnet-4" },
-    { type: "text", name: "envKey", message: "Env var name", initial: "OPENROUTER_API_KEY" },
+    { type: "text", name: "providerId", message: "Provider ID", initial: preset ? preset.id : "openrouter", validate: (v) => (v.trim() ? true : "Required") },
+    { type: "text", name: "providerName", message: "Provider display name", initial: preset ? preset.name : "OpenRouter" },
+    { type: "text", name: "baseUrl", message: "Base URL", initial: preset ? preset.baseUrl : "https://openrouter.ai/api/v1" },
+    { type: "text", name: "model", message: "Default model", initial: preset ? preset.model : "anthropic/claude-sonnet-4" },
+    { type: "text", name: "envKey", message: "Env var name", initial: preset ? preset.envKey : "OPENROUTER_API_KEY" },
     { type: "password", name: "apiKey", message: "API key (stored in shell env, not in TOML)" },
     {
       type: "select",
@@ -182,7 +204,7 @@ async function cmdAdd() {
         { title: "Responses API (recommended for Codex)", value: "responses" },
         { title: "Chat Completions API", value: "chat" },
       ],
-      initial: 0,
+      initial: preset ? (preset.wireApi === "chat" ? 1 : 0) : 0,
     },
     {
       type: "confirm",

@@ -1,5 +1,10 @@
 const { invoke } = window.__TAURI__.core;
 
+const PROVIDER_PRESETS = [
+  { id: "huoshan", name: "HuoShan GLM 5.2", baseUrl: "https://ark.cn-beijing.volces.com/api/coding/v3", model: "glm-latest", envKey: "HUOSHAN_API_KEY", wireApi: "responses" },
+  { id: "opencode-go", name: "OpenCode Go", baseUrl: "https://opencode.ai/zen/go/v1", model: "glm-5.2", envKey: "OPENCODE_GO_API_KEY", wireApi: "chat" },
+];
+
 let currentSnapshot = null;
 
 document.addEventListener("DOMContentLoaded", init);
@@ -38,21 +43,30 @@ async function refresh() {
 
 function renderActiveBanner(snap) {
   const banner = document.getElementById("activeBanner");
-  if (!snap.active_provider) {
-    banner.classList.add("empty");
-    return;
-  }
   banner.classList.remove("empty");
+
+  let id, name, model;
+  if (snap.active_provider) {
+    id = snap.active_provider;
+    const provider = snap.providers.find((p) => p.id === id);
+    name = provider ? provider.name : id;
+    model = snap.active_model || "—";
+  } else {
+    id = "openai-default";
+    name = "Built-in Default";
+    model = "openai";
+  }
+
+  const color = ProviderIcons.colorFor(id, name);
+  const icon = ProviderIcons.render(id, name, { size: 22, fill: "#fff", letterColor: "#fff" });
   banner.innerHTML = `
-    <div class="active-banner-icon">
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
-        <path d="M13 3L5 14h6l-1 7 8-11h-6l1-7z" fill="#fff" stroke="#fff" stroke-width="0.5" stroke-linejoin="round"/>
-      </svg>
+    <div class="active-banner-icon" style="background:${color}">
+      ${icon}
     </div>
     <div class="active-banner-text">
       <div class="active-banner-label">Active Provider</div>
-      <div class="active-banner-provider">${esc(snap.active_provider)}</div>
-      <div class="active-banner-model">${esc(snap.active_model || "—")}</div>
+      <div class="active-banner-provider">${esc(name)}</div>
+      <div class="active-banner-model">${esc(model)}</div>
     </div>
   `;
 }
@@ -109,11 +123,13 @@ function handleCardClick(e) {
 
 function defaultCardHTML(isActive) {
   const keyBadge = `<span class="badge badge-success">Built-in</span>`;
+  const color = ProviderIcons.colorFor("openai", "OpenAI");
+  const icon = ProviderIcons.render("openai", "OpenAI", { size: 20, fill: color });
 
   return `
     <div class="provider-card ${isActive ? "active" : ""}" data-action="activate-default">
       <div class="provider-card-top">
-        <span class="provider-dot"></span>
+        <span class="provider-icon" style="--brand:${color}">${icon}</span>
         <span class="provider-name">Built-in Default</span>
         <div class="provider-badges">
           ${keyBadge}
@@ -132,10 +148,13 @@ function providerCardHTML(p) {
     ? `<span class="badge badge-success">Key Set</span>`
     : `<span class="badge badge-danger">Key Missing</span>`;
 
+  const color = ProviderIcons.colorFor(p.id, p.name);
+  const icon = ProviderIcons.render(p.id, p.name, { size: 20, fill: color, letterColor: color });
+
   return `
     <div class="provider-card ${p.is_active ? "active" : ""}" data-id="${esc(p.id)}" data-action="${p.is_active ? "" : "activate"}" data-id-attr="${esc(p.id)}">
       <div class="provider-card-top">
-        <span class="provider-dot"></span>
+        <span class="provider-icon" style="--brand:${color}">${icon}</span>
         <span class="provider-name">${esc(p.name)}</span>
         <div class="provider-badges">
           ${keyBadge}
@@ -214,7 +233,9 @@ function showEditForm(provider, isClone = false) {
     list.prepend(card);
   }
 
-  card.querySelector("[data-action='cancel']").addEventListener("click", cancelEdit);
+  card.querySelectorAll("[data-action='cancel']").forEach((btn) => {
+    btn.addEventListener("click", cancelEdit);
+  });
   card.querySelector("[data-action='save']").addEventListener("click", () => saveProviderFromForm(card, isEdit ? p.id : null));
   card.querySelector("#formProviderId").focus();
 }
@@ -228,6 +249,15 @@ function editFormHTML(p, isEdit, isClone) {
         ${title}
         <button class="modal-close" data-action="cancel"><svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>
       </div>
+      ${!isEdit ? `
+      <div class="form-group">
+        <label class="form-label">Quick add from preset</label>
+        <select class="form-select" id="formPreset" onchange="applyPreset(parseInt(this.value))">
+          <option value="">Choose a preset...</option>
+          <option value="0">HuoShan GLM 5.2 — Volcano Engine (Responses API)</option>
+          <option value="1">OpenCode Go — glm-5.2 (Chat Completions)</option>
+        </select>
+      </div>` : ""}
       <div class="form-row">
         <div class="form-group">
           <label class="form-label">Provider ID</label>
@@ -488,4 +518,17 @@ function esc(s) {
   return div.innerHTML;
 }
 
+function applyPreset(idx) {
+  if (isNaN(idx)) return;
+  const p = PROVIDER_PRESETS[idx];
+  if (!p) return;
+  document.getElementById("formProviderId").value = p.id;
+  document.getElementById("formName").value = p.name;
+  document.getElementById("formBaseUrl").value = p.baseUrl;
+  document.getElementById("formModel").value = p.model;
+  document.getElementById("formEnvKey").value = p.envKey;
+  document.getElementById("formWireApi").value = p.wireApi;
+}
+
 window.hideModal = hideModal;
+window.applyPreset = applyPreset;

@@ -23,7 +23,7 @@ Then run either `node index.js <command>` or, after `npm link`, just `cpm <comma
 
 | Command | Description |
 | --- | --- |
-| `cpm` or `cpm add` | Interactively add a provider (prompts for id, base URL, model, env key, API key, wire API). |
+| `cpm` or `cpm add` | Interactively add a provider — pick a preset (HuoShan, OpenCode Go) or fill in manually. |
 | `cpm list` | List all providers, mark the active default, and show whether each API-key env var is set. |
 | `cpm use [provider] [model]` | Switch the default provider/model. Without args it opens a picker. |
 | `cpm remove [provider]` | Remove a provider from config (env var is left untouched). |
@@ -31,6 +31,24 @@ Then run either `node index.js <command>` or, after `npm link`, just `cpm <comma
 | `cpm backup` | Create a timestamped backup of `config.toml`. |
 | `cpm restore` | Restore `config.toml` from a previous backup. |
 | `cpm help` | Show usage. |
+
+## Provider presets
+
+Both the CLI and the desktop app include built-in presets that pre-fill the
+correct base URL, model, env var name, and wire API for known providers:
+
+| Preset | Base URL | Wire API | Env Var |
+| --- | --- | --- | --- |
+| HuoShan GLM 5.2 | `https://ark.cn-beijing.volces.com/api/coding/v3` | `responses` | `HUOSHAN_API_KEY` |
+| OpenCode Go | `https://opencode.ai/zen/go/v1` | `chat` | `OPENCODE_GO_API_KEY` |
+
+Pick a preset and all fields fill in automatically — you just enter your API
+key. You can still edit any field after selecting a preset.
+
+> **Important:** OpenCode Go uses the **Chat Completions** wire API, not the
+> Responses API. The preset handles this for you. If you add OpenCode Go
+> manually, make sure to select "Chat Completions" — otherwise Codex will hit
+> a 404.
 
 ## Example: add OpenRouter
 

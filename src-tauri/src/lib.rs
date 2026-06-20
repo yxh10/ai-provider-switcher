@@ -87,7 +87,22 @@ fn ensure_table<'a>(root: &'a mut toml::value::Table, key: &str) -> Result<&'a m
     }
 }
 
-fn pick_rc_file() -> PathBuf {
+fn is_env_key_set(env_key: &str) -> bool {
+    if std::env::var(env_key).is_ok() {
+        return true;
+    }
+
+    if cfg!(target_os = "windows") {
+        let output = std::process::Command::new("cmd")
+            .args(["/C", &format!("echo %{}%", env_key)])
+            .output();
+        if let Ok(out) = output {
+            let val = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            return val != format!("%{}%", env_key) && !val.is_empty();
+        }
+        return false;
+    }
+
     let home = dirs::home_dir().expect("Cannot find home directory");
     let shell = std::env::var("SHELL").unwrap_or_default();
 
@@ -107,23 +122,15 @@ fn pick_rc_file() -> PathBuf {
     for c in &candidates {
         let p = home.join(c);
         if p.exists() {
-            return p;
-        }
-    }
-    home.join(".zshrc")
-}
-
-fn is_env_key_set(env_key: &str) -> bool {
-    if std::env::var(env_key).is_ok() {
-        return true;
-    }
-    let rc_file = pick_rc_file();
-    if rc_file.exists() {
-        if let Ok(content) = fs::read_to_string(&rc_file) {
-            let pattern = format!("export {}=", env_key);
-            return content
-                .lines()
-                .any(|line| line.trim_start().starts_with(&pattern));
+            if let Ok(content) = fs::read_to_string(&p) {
+                let pattern = format!("export {}=", env_key);
+                if content
+                    .lines()
+                    .any(|line| line.trim_start().starts_with(&pattern))
+                {
+                    return true;
+                }
+            }
         }
     }
     false
@@ -327,7 +334,34 @@ fn set_env_var(key: String, value: String) -> Result<(), String> {
         return Ok(());
     }
 
-    let rc_file = pick_rc_file();
+    let home = dirs::home_dir().expect("Cannot find home directory");
+    let shell = std::env::var("SHELL").unwrap_or_default();
+
+    let mut candidates: Vec<&str> = Vec::new();
+    if shell.contains("zsh") {
+        candidates.push(".zshrc");
+    }
+    if shell.contains("bash") {
+        candidates.push(".bashrc");
+        candidates.push(".bash_profile");
+    }
+    candidates.push(".zshrc");
+    candidates.push(".bashrc");
+    candidates.push(".bash_profile");
+    candidates.push(".profile");
+
+    let rc_file = {
+        let mut found = home.join(".zshrc");
+        for c in &candidates {
+            let p = home.join(c);
+            if p.exists() {
+                found = p;
+                break;
+            }
+        }
+        found
+    };
+
     let content = if rc_file.exists() {
         fs::read_to_string(&rc_file).unwrap_or_default()
     } else {

@@ -134,6 +134,14 @@ body {
   flex-shrink: 0;
 }
 
+.active-banner-icon .provider-letter {
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1;
+  font-family: var(--font);
+  color: #fff;
+}
+
 .active-banner-text {
   flex: 1;
   min-width: 0;
@@ -217,7 +225,7 @@ body {
 
 .provider-card.active {
   background: var(--surface-active);
-  border-color: rgba(99, 102, 241, 0.3);
+  border-color: color-mix(in srgb, var(--brand, var(--accent)) 40%, transparent);
 }
 
 .provider-card-top {
@@ -226,18 +234,32 @@ body {
   gap: 10px;
 }
 
-.provider-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--text-dim);
+.provider-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--brand, var(--text-dim)) 13%, transparent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
   flex-shrink: 0;
-  transition: background 0.2s;
+  transition: background 0.2s, box-shadow 0.2s;
 }
 
-.provider-card.active .provider-dot {
-  background: var(--accent);
-  box-shadow: 0 0 8px var(--accent);
+.provider-icon .provider-svg {
+  display: block;
+}
+
+.provider-icon .provider-letter {
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+  font-family: var(--font);
+}
+
+.provider-card.active .provider-icon {
+  background: color-mix(in srgb, var(--brand, var(--accent)) 22%, transparent);
+  box-shadow: 0 0 12px -3px var(--brand, var(--accent));
 }
 
 .provider-name {
@@ -301,7 +323,7 @@ body {
 
 .provider-card-body {
   margin-top: 8px;
-  padding-left: 18px;
+  padding-left: 42px;
 }
 
 .provider-model {
