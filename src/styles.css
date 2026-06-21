@@ -163,7 +163,7 @@ body {
 
 /* ─── Active Provider Banner ─── */
 .active-banner {
-  margin: 14px 24px 0;
+  margin: 14px 24px 8px;
   padding: 16px 20px;
   background: var(--accent-glow);
   border: 1px solid var(--border-light);
@@ -232,7 +232,7 @@ body {
 .main {
   flex: 1;
   overflow-y: auto;
-  padding: 16px 24px 8px;
+  padding: 12px 24px 8px;
 }
 
 .section-header {
