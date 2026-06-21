@@ -10,6 +10,8 @@ const CODEX_PRESETS = [
 ];
 
 const CLAUDE_PRESETS = [
+  { id: "huoshan", name: "HuoShan GLM 5.2", baseUrl: "https://ark.cn-beijing.volces.com/api/coding/v3", model: "glm-latest", authType: "auth_token" },
+  { id: "opencode-go", name: "OpenCode Go", baseUrl: "https://opencode.ai/zen/go", model: "glm-5.2", authType: "auth_token" },
   { id: "litellm", name: "LiteLLM Proxy", baseUrl: "http://localhost:4000", model: "claude-sonnet-4-20250514", authType: "auth_token" },
 ];
 

@@ -107,6 +107,8 @@ conflict.
 
 | Preset | Base URL | Auth type | Model |
 | --- | --- | --- | --- |
+| HuoShan GLM 5.2 | `https://ark.cn-beijing.volces.com/api/coding/v3` | Auth Token | `glm-latest` |
+| OpenCode Go | `https://opencode.ai/zen/go` | Auth Token | `glm-5.2` |
 | LiteLLM Proxy | `http://localhost:4000` | Auth Token | `claude-sonnet-4-20250514` |
 
 The base URL is the **root** of an Anthropic Messages-compatible endpoint —
