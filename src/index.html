@@ -12,7 +12,13 @@
       <div class="header-brand">
         <div class="logo">
           <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
-            <rect width="28" height="28" rx="8" fill="#6366f1"/>
+            <defs>
+              <linearGradient id="logoGrad" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0" stop-color="#7c7ff5"/>
+                <stop offset="1" stop-color="#4f46e5"/>
+              </linearGradient>
+            </defs>
+            <rect width="28" height="28" rx="8" fill="url(#logoGrad)"/>
             <path d="M14 6V3l-5 4 5 4V8c3.31 0 6 2.69 6 6 0 1.01-.25 1.97-.7 2.8l1.46 1.46C21.54 16.97 22 15.51 22 14c0-4.42-3.58-8-8-8zm0 14c-3.31 0-6-2.69-6-6 0-1.01.25-1.97.7-2.8L7.24 9.74C6.46 10.97 6 12.43 6 14c0 4.42 3.58 8 8 8v3l5-4-5-4v3z" fill="#fff"/>
           </svg>
         </div>
