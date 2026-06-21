@@ -17,7 +17,7 @@
           </svg>
         </div>
         <div>
-          <h1>Codex Provider Manager</h1>
+          <h1 id="appTitle">Codex Providers</h1>
           <p class="config-path" id="configPath">~/.codex/config.toml</p>
         </div>
       </div>
@@ -26,6 +26,19 @@
         Add Provider
       </button>
     </header>
+
+    <div class="target-bar">
+      <div class="target-switch" id="targetSwitch">
+        <button class="target-seg" data-target="codex" type="button">
+          <span class="target-seg-icon"><svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M13 3L5 14h6l-1 7 8-11h-6l1-7z" fill="currentColor"/></svg></span>
+          <span class="target-seg-label">Codex</span>
+        </button>
+        <button class="target-seg" data-target="claude" type="button">
+          <span class="target-seg-icon"><svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M17.3041 3.541h-3.6718l6.696 16.918H24L17.3041 3.541ZM6.696 3.541 0 20.459h3.7442l1.3693-3.5527h7.0052l1.3693 3.5528h3.7442L10.5363 3.5409Zm-.3712 10.2232 2.2914-5.9456 2.2914 5.9456H6.3248Z" fill="currentColor"/></svg></span>
+          <span class="target-seg-label">Claude Code</span>
+        </button>
+      </div>
+    </div>
 
     <div class="active-banner" id="activeBanner"></div>
 

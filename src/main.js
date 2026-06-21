@@ -1,15 +1,66 @@
 const { invoke } = window.__TAURI__.core;
 
-const PROVIDER_PRESETS = [
+// ─── Per-target configuration ───────────────────────────────────────────
+// Each target describes one coding agent (Codex, Claude Code) and how to talk
+// to its backend commands, what presets it offers, and how its cards/form look.
+
+const CODEX_PRESETS = [
   { id: "huoshan", name: "HuoShan GLM 5.2", baseUrl: "https://ark.cn-beijing.volces.com/api/coding/v3", model: "glm-latest", envKey: "HUOSHAN_API_KEY", wireApi: "responses" },
   { id: "opencode-go", name: "OpenCode Go", baseUrl: "https://opencode.ai/zen/go/v1", model: "glm-5.2", envKey: "OPENCODE_GO_API_KEY", wireApi: "chat" },
 ];
+
+const CLAUDE_PRESETS = [
+  { id: "litellm", name: "LiteLLM Proxy", baseUrl: "http://localhost:4000", model: "claude-sonnet-4-20250514", authType: "auth_token" },
+];
+
+const TARGETS = {
+  codex: {
+    id: "codex",
+    label: "Codex",
+    presets: CODEX_PRESETS,
+    defaultCard: { iconId: "openai", name: "Built-in Default", model: "openai", url: "Codex built-in OpenAI provider" },
+    getConfig: () => invoke("get_config"),
+    save: (input) => invoke("save_provider", { input }),
+    setDefault: (id) => invoke("set_default", { input: { providerId: id } }),
+    resetDefault: () => invoke("reset_to_default"),
+    remove: (id) => invoke("remove_provider", { providerId: id }),
+    envStatus: () => invoke("get_env_status"),
+    backup: () => invoke("backup_config"),
+    listBackups: () => invoke("list_backups"),
+    restore: (filename) => invoke("restore_config", { filename }),
+    hasEnvStatus: true,
+  },
+  claude: {
+    id: "claude",
+    label: "Claude Code",
+    presets: CLAUDE_PRESETS,
+    defaultCard: { iconId: "anthropic", name: "Anthropic Default", model: "claude (subscription)", url: "Native Anthropic API — uses your Claude subscription" },
+    getConfig: () => invoke("get_claude_config"),
+    save: (input) => invoke("save_claude_provider", { input }),
+    setDefault: (id) => invoke("set_claude_default", { input: { providerId: id } }),
+    resetDefault: () => invoke("reset_claude_default"),
+    remove: (id) => invoke("remove_claude_provider", { providerId: id }),
+    envStatus: null,
+    backup: () => invoke("backup_claude_config"),
+    listBackups: () => invoke("list_claude_backups"),
+    restore: (ts) => invoke("restore_claude_config", { ts }),
+    hasEnvStatus: false,
+  },
+};
+
+const STORAGE_KEY = "providerSwitcher.target";
+let currentTargetId = localStorage.getItem(STORAGE_KEY) || "codex";
+if (!TARGETS[currentTargetId]) currentTargetId = "codex";
+function T() { return TARGETS[currentTargetId]; }
 
 let currentSnapshot = null;
 
 document.addEventListener("DOMContentLoaded", init);
 
 async function init() {
+  document.querySelectorAll(".target-seg").forEach((btn) => {
+    btn.addEventListener("click", () => switchTarget(btn.dataset.target));
+  });
   document.getElementById("addBtn").addEventListener("click", () => showEditForm());
   document.getElementById("envBtn").addEventListener("click", showEnvStatus);
   document.getElementById("backupBtn").addEventListener("click", doBackup);
@@ -26,14 +77,35 @@ async function init() {
     }
   });
 
+  applyTargetUI();
   await refresh();
+}
+
+function switchTarget(id) {
+  if (!TARGETS[id] || id === currentTargetId) return;
+  currentTargetId = id;
+  localStorage.setItem(STORAGE_KEY, id);
+  hideModal();
+  const editing = document.querySelector(".editing-card");
+  if (editing) editing.remove();
+  applyTargetUI();
+  refresh();
+}
+
+function applyTargetUI() {
+  const t = T();
+  document.querySelectorAll(".target-seg").forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.target === currentTargetId);
+  });
+  document.getElementById("appTitle").textContent = `${t.label} Providers`;
+  document.getElementById("envBtn").style.display = t.hasEnvStatus ? "" : "none";
 }
 
 async function refresh() {
   try {
-    currentSnapshot = await invoke("get_config");
+    currentSnapshot = await T().getConfig();
     document.getElementById("configPath").textContent =
-      shortenPath(currentSnapshot.config_path);
+      shortenPath(currentSnapshot.config_path || currentSnapshot.settings_path);
     renderActiveBanner(currentSnapshot);
     renderProviders(currentSnapshot);
   } catch (err) {
@@ -44,6 +116,7 @@ async function refresh() {
 function renderActiveBanner(snap) {
   const banner = document.getElementById("activeBanner");
   banner.classList.remove("empty");
+  const def = T().defaultCard;
 
   let id, name, model;
   if (snap.active_provider) {
@@ -52,9 +125,9 @@ function renderActiveBanner(snap) {
     name = provider ? provider.name : id;
     model = snap.active_model || "—";
   } else {
-    id = "openai-default";
-    name = "Built-in Default";
-    model = "openai";
+    id = def.iconId;
+    name = def.name;
+    model = def.model;
   }
 
   const color = ProviderIcons.colorFor(id, name);
@@ -107,11 +180,11 @@ function handleCardClick(e) {
   const id = card.dataset.id;
 
   if (action === "activate-default") {
-    invoke("reset_to_default")
-      .then(() => { toast("Switched to built-in default", "success"); refresh(); })
+    T().resetDefault()
+      .then(() => { toast("Switched to default", "success"); refresh(); })
       .catch((err) => toast("Failed: " + err, "error"));
   } else if (action === "activate" && id) {
-    invoke("set_default", { input: { providerId: id } })
+    T().setDefault(id)
       .then(() => {
         const p = currentSnapshot.providers.find((p) => p.id === id);
         toast(`${p?.name || id} is now the default`, "success");
@@ -122,34 +195,40 @@ function handleCardClick(e) {
 }
 
 function defaultCardHTML(isActive) {
-  const keyBadge = `<span class="badge badge-success">Built-in</span>`;
-  const color = ProviderIcons.colorFor("openai", "OpenAI");
-  const icon = ProviderIcons.render("openai", "OpenAI", { size: 20, fill: color });
+  const def = T().defaultCard;
+  const color = ProviderIcons.colorFor(def.iconId, def.name);
+  const icon = ProviderIcons.render(def.iconId, def.name, { size: 20, fill: color });
 
   return `
     <div class="provider-card ${isActive ? "active" : ""}" data-action="activate-default">
       <div class="provider-card-top">
         <span class="provider-icon" style="--brand:${color}">${icon}</span>
-        <span class="provider-name">Built-in Default</span>
+        <span class="provider-name">${esc(def.name)}</span>
         <div class="provider-badges">
-          ${keyBadge}
+          <span class="badge badge-success">Built-in</span>
         </div>
       </div>
       <div class="provider-card-body">
-        <div class="provider-model">openai</div>
-        <div class="provider-url">Codex built-in OpenAI provider</div>
+        <div class="provider-model">${esc(def.model)}</div>
+        <div class="provider-url">${esc(def.url)}</div>
       </div>
     </div>
   `;
 }
 
 function providerCardHTML(p) {
-  const keyBadge = p.is_env_set
+  const isClaude = T().id === "claude";
+  const keyOk = isClaude ? p.is_key_set : p.is_env_set;
+  const keyBadge = keyOk
     ? `<span class="badge badge-success">Key Set</span>`
     : `<span class="badge badge-danger">Key Missing</span>`;
 
   const color = ProviderIcons.colorFor(p.id, p.name);
   const icon = ProviderIcons.render(p.id, p.name, { size: 20, fill: color, letterColor: color });
+
+  const meta = isClaude
+    ? `<span class="provider-meta-item"><strong>auth:</strong> ${p.auth_type === "api_key" ? "x-api-key" : "Bearer token"}</span>`
+    : `<span class="provider-meta-item"><strong>wire_api:</strong> ${esc(p.wire_api)}</span><span class="provider-meta-item"><strong>env_key:</strong> ${esc(p.env_key)}</span>`;
 
   return `
     <div class="provider-card ${p.is_active ? "active" : ""}" data-id="${esc(p.id)}" data-action="${p.is_active ? "" : "activate"}" data-id-attr="${esc(p.id)}">
@@ -175,8 +254,7 @@ function providerCardHTML(p) {
         <div class="provider-model">${esc(p.model || p.id)}</div>
         <div class="provider-url">${esc(p.base_url)}</div>
         <div class="provider-meta">
-          <span class="provider-meta-item"><strong>wire_api:</strong> ${esc(p.wire_api)}</span>
-          <span class="provider-meta-item"><strong>env_key:</strong> ${esc(p.env_key)}</span>
+          ${meta}
         </div>
       </div>
     </div>
@@ -188,9 +266,9 @@ function handleCardAction(e) {
   const action = btn.dataset.action;
 
   if (action === "activate-default") {
-    invoke("reset_to_default")
+    T().resetDefault()
       .then(() => {
-        toast("Switched to built-in default", "success");
+        toast("Switched to default", "success");
         refresh();
       })
       .catch((err) => toast("Failed: " + err, "error"));
@@ -202,7 +280,7 @@ function handleCardAction(e) {
   if (!provider) return;
 
   if (action === "activate") {
-    invoke("set_default", { input: { providerId: provider.id } })
+    T().setDefault(provider.id)
       .then(() => {
         toast(`${provider.name} is now the default`, "success");
         refresh();
@@ -240,24 +318,63 @@ function showEditForm(provider, isClone = false) {
   card.querySelector("#formProviderId").focus();
 }
 
+function presetOptionsHTML() {
+  const presets = T().presets;
+  const opts = presets.map((p, i) => `<option value="${i}">${esc(p.name)}</option>`).join("");
+  return `<option value="">Choose a preset...</option>${opts}`;
+}
+
 function editFormHTML(p, isEdit, isClone) {
+  const isClaude = T().id === "claude";
   const title = isClone ? "Clone Provider" : isEdit ? "Edit Provider" : "Add New Provider";
   const ac = 'autocapitalize="off" autocorrect="off" spellcheck="false"';
+
+  const presetBlock = !isEdit ? `
+      <div class="form-group">
+        <label class="form-label">Quick add from preset</label>
+        <select class="form-select" id="formPreset" onchange="applyPreset(parseInt(this.value))">
+          ${presetOptionsHTML()}
+        </select>
+      </div>` : "";
+
+  const authOrWireBlock = isClaude ? `
+        <div class="form-group">
+          <label class="form-label">Auth Type</label>
+          <select class="form-select" id="formAuthType">
+            <option value="auth_token" ${p.auth_type === "api_key" ? "" : "selected"}>Auth Token (Bearer header)</option>
+            <option value="api_key" ${p.auth_type === "api_key" ? "selected" : ""}>API Key (x-api-key header)</option>
+          </select>
+          <div class="form-hint">Use <strong>Auth Token</strong> if your endpoint expects <code>Authorization: Bearer …</code>. Use <strong>API Key</strong> for Anthropic's native <code>x-api-key</code> header.</div>
+        </div>` : `
+        <div class="form-group">
+          <label class="form-label">Wire API</label>
+          <select class="form-select" id="formWireApi">
+            <option value="responses" ${p.wire_api === "responses" ? "selected" : ""}>Responses API</option>
+            <option value="chat" ${p.wire_api === "chat" ? "selected" : ""}>Chat Completions</option>
+          </select>
+        </div>`;
+
+  const envKeyBlock = isClaude ? "" : `
+        <div class="form-group">
+          <label class="form-label">Env Var Name</label>
+          <input class="form-input mono" id="formEnvKey" value="${esc(p.env_key || "")}" placeholder="OPENROUTER_API_KEY" ${ac} />
+        </div>`;
+
+  const modelHint = isClaude
+    ? `The model name your endpoint accepts (e.g. <code>claude-sonnet-4-20250514</code>). Claude Code sends this as <code>ANTHROPIC_MODEL</code>.`
+    : `The exact model name your provider's API expects (e.g. <code>glm-4-7-251222</code> for HuoShan, <code>gpt-4o</code> for OpenAI).`;
+
+  const apiKeyHint = isClaude
+    ? `Stored in <code>~/.claude/provider-switcher.json</code> (chmod 600). When this provider is active it's written to <code>~/.claude/settings.json</code> under <code>env</code>.`
+    : `Stored in your shell rc file, never in config.toml.`;
+
   return `
     <div class="edit-form">
       <div class="edit-form-title">
         ${title}
         <button class="modal-close" data-action="cancel"><svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>
       </div>
-      ${!isEdit ? `
-      <div class="form-group">
-        <label class="form-label">Quick add from preset</label>
-        <select class="form-select" id="formPreset" onchange="applyPreset(parseInt(this.value))">
-          <option value="">Choose a preset...</option>
-          <option value="0">HuoShan GLM 5.2 — Volcano Engine (Responses API)</option>
-          <option value="1">OpenCode Go — glm-5.2 (Chat Completions)</option>
-        </select>
-      </div>` : ""}
+      ${presetBlock}
       <div class="form-row">
         <div class="form-group">
           <label class="form-label">Provider ID</label>
@@ -270,30 +387,23 @@ function editFormHTML(p, isEdit, isClone) {
       </div>
       <div class="form-group">
         <label class="form-label">Base URL</label>
-        <input class="form-input mono" id="formBaseUrl" value="${esc(p.base_url || "")}" placeholder="https://openrouter.ai/api/v1" ${ac} />
+        <input class="form-input mono" id="formBaseUrl" value="${esc(p.base_url || "")}" placeholder="${isClaude ? "http://localhost:4000" : "https://openrouter.ai/api/v1"}" ${ac} />
+        ${isClaude ? `<div class="form-hint">Root URL of an Anthropic Messages-compatible endpoint. Claude Code appends <code>/v1/messages</code>. Works for both the Claude Code CLI and desktop app.</div>` : ""}
       </div>
       <div class="form-row">
       <div class="form-group">
         <label class="form-label">Default Model</label>
-        <input class="form-input mono" id="formModel" value="${esc(p.model || "")}" placeholder="anthropic/claude-sonnet-4" ${ac} />
-        <div class="form-hint">The exact model name your provider's API expects (e.g. <code>glm-4-7-251222</code> for HuoShan, <code>gpt-4o</code> for OpenAI).</div>
+        <input class="form-input mono" id="formModel" value="${esc(p.model || "")}" placeholder="${isClaude ? "claude-sonnet-4-20250514" : "anthropic/claude-sonnet-4"}" ${ac} />
+        <div class="form-hint">${modelHint}</div>
       </div>
-        <div class="form-group">
-          <label class="form-label">Wire API</label>
-          <select class="form-select" id="formWireApi">
-            <option value="responses" ${p.wire_api === "responses" ? "selected" : ""}>Responses API</option>
-            <option value="chat" ${p.wire_api === "chat" ? "selected" : ""}>Chat Completions</option>
-          </select>
-        </div>
+        ${authOrWireBlock}
       </div>
       <div class="form-row">
-        <div class="form-group">
-          <label class="form-label">Env Var Name</label>
-          <input class="form-input mono" id="formEnvKey" value="${esc(p.env_key || "")}" placeholder="OPENROUTER_API_KEY" ${ac} />
-        </div>
+        ${envKeyBlock}
         <div class="form-group">
           <label class="form-label">API Key ${isEdit ? "(leave blank to keep existing)" : ""}</label>
-          <input class="form-input mono" id="formApiKey" type="password" placeholder="${isEdit ? "••••••••" : "sk-or-v1-..."}" ${ac} />
+          <input class="form-input mono" id="formApiKey" type="password" placeholder="${isEdit ? "••••••••" : "sk-..."}" ${ac} />
+          <div class="form-hint">${apiKeyHint}</div>
         </div>
       </div>
       <label class="form-check">
@@ -313,34 +423,33 @@ function cancelEdit() {
 }
 
 async function saveProviderFromForm(card, existingId) {
+  const isClaude = T().id === "claude";
   const id = card.querySelector("#formProviderId").value.trim();
   const name = card.querySelector("#formName").value.trim();
   const baseUrl = card.querySelector("#formBaseUrl").value.trim();
   const model = card.querySelector("#formModel").value.trim();
-  const envKey = card.querySelector("#formEnvKey").value.trim();
   const apiKey = card.querySelector("#formApiKey").value.trim();
-  const wireApi = card.querySelector("#formWireApi").value;
   const setDefault = card.querySelector("#formSetDefault").checked;
 
   if (!id) return toast("Provider ID is required", "error");
   if (!name) return toast("Display name is required", "error");
   if (!baseUrl) return toast("Base URL is required", "error");
-  if (!envKey) return toast("Env var name is required", "error");
   if (!existingId && !apiKey) return toast("API key is required for new providers", "error");
 
   try {
-    await invoke("save_provider", {
-      input: {
-        id,
-        name,
-        baseUrl,
-        model: model || id,
-        envKey,
-        apiKey,
-        wireApi,
-        setAsDefault: setDefault,
-      },
-    });
+    if (isClaude) {
+      const authType = card.querySelector("#formAuthType").value;
+      await T().save({
+        id, name, baseUrl, model: model || id, authType, apiKey, setAsDefault: setDefault,
+      });
+    } else {
+      const envKey = card.querySelector("#formEnvKey").value.trim();
+      const wireApi = card.querySelector("#formWireApi").value;
+      if (!envKey) return toast("Env var name is required", "error");
+      await T().save({
+        id, name, baseUrl, model: model || id, envKey, apiKey, wireApi, setAsDefault: setDefault,
+      });
+    }
     toast(`${name} saved successfully`, "success");
     await refresh();
   } catch (err) {
@@ -349,11 +458,15 @@ async function saveProviderFromForm(card, existingId) {
 }
 
 function showRemoveConfirm(provider) {
+  const isClaude = T().id === "claude";
+  const note = isClaude
+    ? "If this is the active provider, the ANTHROPIC_* env vars will be cleared from settings.json."
+    : "The API key env var will be left untouched.";
   showModal(`
     <div class="modal-title">Remove Provider</div>
     <div class="confirm-text">
       Remove <strong>${esc(provider.name)}</strong> from config?<br>
-      <span style="color: var(--text-dim); font-size: 12px;">The API key env var will be left untouched.</span>
+      <span style="color: var(--text-dim); font-size: 12px;">${note}</span>
     </div>
     <div class="confirm-actions">
       <button class="btn btn-secondary" onclick="hideModal()">Cancel</button>
@@ -362,7 +475,7 @@ function showRemoveConfirm(provider) {
   `);
   document.getElementById("confirmRemove").addEventListener("click", async () => {
     try {
-      await invoke("remove_provider", { providerId: provider.id });
+      await T().remove(provider.id);
       hideModal();
       toast(`${provider.name} removed`, "success");
       await refresh();
@@ -373,8 +486,9 @@ function showRemoveConfirm(provider) {
 }
 
 async function showEnvStatus() {
+  if (!T().hasEnvStatus) return;
   try {
-    const status = await invoke("get_env_status");
+    const status = await T().envStatus();
     if (status.length === 0) {
       showModal(`
         <div class="modal-title">Environment Variable Status</div>
@@ -418,7 +532,7 @@ async function showEnvStatus() {
 
 async function doBackup() {
   try {
-    const path = await invoke("backup_config");
+    await T().backup();
     toast("Backup created", "success");
   } catch (err) {
     toast("Backup failed: " + err, "error");
@@ -426,12 +540,14 @@ async function doBackup() {
 }
 
 async function showRestore() {
+  const isClaude = T().id === "claude";
+  const dirLabel = isClaude ? "~/.claude/" : "~/.codex/";
   try {
-    const backups = await invoke("list_backups");
+    const backups = await T().listBackups();
     if (backups.length === 0) {
       showModal(`
         <div class="modal-title">Restore Config</div>
-        <div class="confirm-text">No backups found in ~/.codex/</div>
+        <div class="confirm-text">No backups found in ${esc(dirLabel)}</div>
         <div class="confirm-actions">
           <button class="btn btn-secondary" onclick="hideModal()">Close</button>
         </div>
@@ -462,9 +578,9 @@ async function showRestore() {
     `);
     document.querySelectorAll("[data-restore]").forEach((btn) => {
       btn.addEventListener("click", async () => {
-        const filename = btn.dataset.restore;
+        const key = btn.dataset.restore;
         try {
-          await invoke("restore_config", { filename });
+          await T().restore(key);
           hideModal();
           toast("Config restored", "success");
           await refresh();
@@ -520,14 +636,18 @@ function esc(s) {
 
 function applyPreset(idx) {
   if (isNaN(idx)) return;
-  const p = PROVIDER_PRESETS[idx];
+  const p = T().presets[idx];
   if (!p) return;
   document.getElementById("formProviderId").value = p.id;
   document.getElementById("formName").value = p.name;
   document.getElementById("formBaseUrl").value = p.baseUrl;
   document.getElementById("formModel").value = p.model;
-  document.getElementById("formEnvKey").value = p.envKey;
-  document.getElementById("formWireApi").value = p.wireApi;
+  if (T().id === "claude") {
+    document.getElementById("formAuthType").value = p.authType;
+  } else {
+    document.getElementById("formEnvKey").value = p.envKey;
+    document.getElementById("formWireApi").value = p.wireApi;
+  }
 }
 
 window.hideModal = hideModal;

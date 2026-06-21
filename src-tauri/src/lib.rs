@@ -475,6 +475,402 @@ fn restore_config(filename: String) -> Result<(), String> {
     Ok(())
 }
 
+// ===================== Claude Code =====================
+
+fn claude_dir() -> PathBuf {
+    let home = dirs::home_dir().expect("Cannot find home directory");
+    home.join(".claude")
+}
+
+fn claude_settings_path() -> PathBuf {
+    claude_dir().join("settings.json")
+}
+
+fn claude_store_path() -> PathBuf {
+    claude_dir().join("provider-switcher.json")
+}
+
+fn set_file_perms_600(path: &std::path::Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = fs::metadata(path) {
+            let mut perms = meta.permissions();
+            perms.set_mode(0o600);
+            let _ = fs::set_permissions(path, perms);
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ClaudeProvider {
+    pub id: String,
+    pub name: String,
+    pub base_url: String,
+    pub model: String,
+    pub auth_type: String,
+    pub api_key: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct ClaudeStore {
+    #[serde(default)]
+    pub providers: Vec<ClaudeProvider>,
+    #[serde(default)]
+    pub active_provider: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct ClaudeProviderInfo {
+    pub id: String,
+    pub name: String,
+    pub base_url: String,
+    pub model: String,
+    pub auth_type: String,
+    pub is_active: bool,
+    pub is_key_set: bool,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct ClaudeConfigSnapshot {
+    pub providers: Vec<ClaudeProviderInfo>,
+    pub active_provider: Option<String>,
+    pub active_model: Option<String>,
+    pub settings_path: String,
+    pub store_path: String,
+}
+
+fn read_claude_settings() -> Result<serde_json::Value, String> {
+    let path = claude_settings_path();
+    if !path.exists() {
+        return Ok(serde_json::json!({}));
+    }
+    let content = fs::read_to_string(&path)
+        .map_err(|e| format!("Failed to read settings.json: {}", e))?;
+    if content.trim().is_empty() {
+        return Ok(serde_json::json!({}));
+    }
+    serde_json::from_str(&content).map_err(|e| format!("Failed to parse settings.json: {}", e))
+}
+
+fn write_claude_settings(val: &serde_json::Value) -> Result<(), String> {
+    let dir = claude_dir();
+    fs::create_dir_all(&dir).map_err(|e| format!("Cannot create .claude dir: {}", e))?;
+    let path = claude_settings_path();
+    if path.exists() {
+        let bak = format!("{}.bak.{}", path.display(), timestamp());
+        let _ = fs::copy(&path, &bak);
+    }
+    let content = serde_json::to_string_pretty(val)
+        .map_err(|e| format!("Failed to serialize settings.json: {}", e))?;
+    let mut out = content;
+    if !out.ends_with('\n') {
+        out.push('\n');
+    }
+    fs::write(&path, &out).map_err(|e| format!("Failed to write settings.json: {}", e))?;
+    set_file_perms_600(&path);
+    Ok(())
+}
+
+fn read_claude_store() -> Result<ClaudeStore, String> {
+    let path = claude_store_path();
+    if !path.exists() {
+        return Ok(ClaudeStore::default());
+    }
+    let content = fs::read_to_string(&path)
+        .map_err(|e| format!("Failed to read provider-switcher.json: {}", e))?;
+    if content.trim().is_empty() {
+        return Ok(ClaudeStore::default());
+    }
+    serde_json::from_str(&content).map_err(|e| format!("Failed to parse provider-switcher.json: {}", e))
+}
+
+fn write_claude_store(store: &ClaudeStore) -> Result<(), String> {
+    let dir = claude_dir();
+    fs::create_dir_all(&dir).map_err(|e| format!("Cannot create .claude dir: {}", e))?;
+    let path = claude_store_path();
+    if path.exists() {
+        let bak = format!("{}.bak.{}", path.display(), timestamp());
+        let _ = fs::copy(&path, &bak);
+    }
+    let mut content = serde_json::to_string_pretty(store)
+        .map_err(|e| format!("Failed to serialize provider-switcher.json: {}", e))?;
+    if !content.ends_with('\n') {
+        content.push('\n');
+    }
+    fs::write(&path, &content).map_err(|e| format!("Failed to write provider-switcher.json: {}", e))?;
+    set_file_perms_600(&path);
+    Ok(())
+}
+
+fn apply_provider_to_settings(settings: &mut serde_json::Value, p: &ClaudeProvider) -> Result<(), String> {
+    let obj = settings
+        .as_object_mut()
+        .ok_or("settings.json root is not a JSON object")?;
+    let env = obj
+        .entry("env".to_string())
+        .or_insert_with(|| serde_json::json!({}));
+    let env_obj = env
+        .as_object_mut()
+        .ok_or("settings.json 'env' is not a JSON object")?;
+
+    env_obj.insert(
+        "ANTHROPIC_BASE_URL".to_string(),
+        serde_json::Value::String(p.base_url.clone()),
+    );
+    env_obj.insert(
+        "ANTHROPIC_MODEL".to_string(),
+        serde_json::Value::String(p.model.clone()),
+    );
+    if p.auth_type == "api_key" {
+        env_obj.insert(
+            "ANTHROPIC_API_KEY".to_string(),
+            serde_json::Value::String(p.api_key.clone()),
+        );
+        env_obj.remove("ANTHROPIC_AUTH_TOKEN");
+    } else {
+        env_obj.insert(
+            "ANTHROPIC_AUTH_TOKEN".to_string(),
+            serde_json::Value::String(p.api_key.clone()),
+        );
+        env_obj.remove("ANTHROPIC_API_KEY");
+    }
+    Ok(())
+}
+
+fn reset_claude_env_in_settings(settings: &mut serde_json::Value) -> Result<(), String> {
+    if let Some(obj) = settings.as_object_mut() {
+        if let Some(env) = obj.get_mut("env").and_then(|v| v.as_object_mut()) {
+            env.remove("ANTHROPIC_BASE_URL");
+            env.remove("ANTHROPIC_MODEL");
+            env.remove("ANTHROPIC_AUTH_TOKEN");
+            env.remove("ANTHROPIC_API_KEY");
+        }
+    }
+    Ok(())
+}
+
+fn activate_claude(id: &str, store: &mut ClaudeStore) -> Result<(), String> {
+    let p = store
+        .providers
+        .iter()
+        .find(|p| p.id == id)
+        .ok_or(format!("Unknown provider: {}", id))?
+        .clone();
+
+    let mut settings = read_claude_settings()?;
+    apply_provider_to_settings(&mut settings, &p)?;
+    write_claude_settings(&settings)?;
+    store.active_provider = Some(id.to_string());
+    write_claude_store(store)?;
+    Ok(())
+}
+
+#[tauri::command]
+fn get_claude_config() -> Result<ClaudeConfigSnapshot, String> {
+    let store = read_claude_store()?;
+    let settings = read_claude_settings()?;
+    let env = settings.get("env").and_then(|v| v.as_object());
+
+    let active_base_url = env
+        .and_then(|m| m.get("ANTHROPIC_BASE_URL"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let active_model = env
+        .and_then(|m| m.get("ANTHROPIC_MODEL"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    let mut active_provider: Option<String> = None;
+    if let Some(ref base_url) = active_base_url {
+        for p in &store.providers {
+            if &p.base_url == base_url
+                && (active_model.as_deref() == Some(&p.model) || active_model.is_none())
+            {
+                active_provider = Some(p.id.clone());
+                break;
+            }
+        }
+    }
+
+    let mut providers = Vec::new();
+    for p in &store.providers {
+        providers.push(ClaudeProviderInfo {
+            id: p.id.clone(),
+            name: p.name.clone(),
+            base_url: p.base_url.clone(),
+            model: p.model.clone(),
+            auth_type: p.auth_type.clone(),
+            is_active: active_provider.as_deref() == Some(&p.id),
+            is_key_set: !p.api_key.is_empty(),
+        });
+    }
+    providers.sort_by(|a, b| b.is_active.cmp(&a.is_active).then(a.id.cmp(&b.id)));
+
+    Ok(ClaudeConfigSnapshot {
+        providers,
+        active_provider,
+        active_model,
+        settings_path: claude_settings_path().to_string_lossy().to_string(),
+        store_path: claude_store_path().to_string_lossy().to_string(),
+    })
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SaveClaudeProviderInput {
+    id: String,
+    name: String,
+    base_url: String,
+    model: String,
+    auth_type: String,
+    api_key: String,
+    set_as_default: bool,
+}
+
+#[tauri::command]
+fn save_claude_provider(input: SaveClaudeProviderInput) -> Result<(), String> {
+    let mut store = read_claude_store()?;
+
+    if let Some(existing) = store.providers.iter_mut().find(|p| p.id == input.id) {
+        existing.name = input.name.clone();
+        existing.base_url = input.base_url.clone();
+        existing.model = input.model.clone();
+        existing.auth_type = input.auth_type.clone();
+        if !input.api_key.is_empty() {
+            existing.api_key = input.api_key.clone();
+        }
+    } else {
+        store.providers.push(ClaudeProvider {
+            id: input.id.clone(),
+            name: input.name.clone(),
+            base_url: input.base_url.clone(),
+            model: input.model.clone(),
+            auth_type: input.auth_type.clone(),
+            api_key: input.api_key.clone(),
+        });
+    }
+
+    if input.set_as_default {
+        activate_claude(&input.id, &mut store)?;
+    } else {
+        write_claude_store(&store)?;
+    }
+    Ok(())
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SetClaudeDefaultInput {
+    provider_id: String,
+}
+
+#[tauri::command]
+fn set_claude_default(input: SetClaudeDefaultInput) -> Result<(), String> {
+    let mut store = read_claude_store()?;
+    activate_claude(&input.provider_id, &mut store)
+}
+
+#[tauri::command]
+fn reset_claude_default() -> Result<(), String> {
+    let mut settings = read_claude_settings()?;
+    reset_claude_env_in_settings(&mut settings)?;
+    write_claude_settings(&settings)?;
+
+    let mut store = read_claude_store()?;
+    store.active_provider = None;
+    write_claude_store(&store)?;
+    Ok(())
+}
+
+#[tauri::command]
+fn remove_claude_provider(provider_id: String) -> Result<(), String> {
+    let mut store = read_claude_store()?;
+    let was_active = store.active_provider.as_deref() == Some(&provider_id);
+    store.providers.retain(|p| p.id != provider_id);
+    if store.active_provider.as_deref() == Some(&provider_id) {
+        store.active_provider = None;
+    }
+    write_claude_store(&store)?;
+
+    if was_active {
+        let mut settings = read_claude_settings()?;
+        reset_claude_env_in_settings(&mut settings)?;
+        write_claude_settings(&settings)?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn backup_claude_config() -> Result<String, String> {
+    let dir = claude_dir();
+    fs::create_dir_all(&dir).map_err(|e| format!("Cannot create .claude dir: {}", e))?;
+    let ts = timestamp();
+    let settings = claude_settings_path();
+    let store = claude_store_path();
+    if settings.exists() {
+        let bak = dir.join(format!("settings.json.bak.{}", ts));
+        fs::copy(&settings, &bak).map_err(|e| format!("Backup settings failed: {}", e))?;
+    }
+    if store.exists() {
+        let bak = dir.join(format!("provider-switcher.json.bak.{}", ts));
+        fs::copy(&store, &bak).map_err(|e| format!("Backup store failed: {}", e))?;
+    }
+    Ok(ts)
+}
+
+#[tauri::command]
+fn list_claude_backups() -> Result<Vec<(String, String)>, String> {
+    let dir = claude_dir();
+    if !dir.exists() {
+        return Ok(Vec::new());
+    }
+    let mut tss: Vec<String> = Vec::new();
+    let entries = fs::read_dir(&dir).map_err(|e| format!("Cannot read dir: {}", e))?;
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if let Some(rest) = name.strip_prefix("settings.json.bak.") {
+            tss.push(rest.to_string());
+        }
+    }
+    tss.sort();
+    tss.dedup();
+    let mut out: Vec<(String, String)> = tss.into_iter().map(|ts| (ts.clone(), ts)).collect();
+    out.sort_by(|a, b| b.1.cmp(&a.1));
+    Ok(out)
+}
+
+#[tauri::command]
+fn restore_claude_config(ts: String) -> Result<(), String> {
+    let dir = claude_dir();
+    let settings = claude_settings_path();
+    let store = claude_store_path();
+    let settings_bak = dir.join(format!("settings.json.bak.{}", ts));
+    let store_bak = dir.join(format!("provider-switcher.json.bak.{}", ts));
+
+    if !settings_bak.exists() && !store_bak.exists() {
+        return Err(format!("Backup not found for timestamp: {}", ts));
+    }
+
+    let new_ts = timestamp();
+    if settings.exists() {
+        let _ = fs::copy(&settings, dir.join(format!("settings.json.bak.{}", new_ts)));
+    }
+    if store.exists() {
+        let _ = fs::copy(&store, dir.join(format!("provider-switcher.json.bak.{}", new_ts)));
+    }
+
+    if settings_bak.exists() {
+        fs::copy(&settings_bak, &settings).map_err(|e| format!("Restore settings failed: {}", e))?;
+        set_file_perms_600(&settings);
+    }
+    if store_bak.exists() {
+        fs::copy(&store_bak, &store).map_err(|e| format!("Restore store failed: {}", e))?;
+        set_file_perms_600(&store);
+    }
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -499,7 +895,124 @@ pub fn run() {
             backup_config,
             list_backups,
             restore_config,
+            get_claude_config,
+            save_claude_provider,
+            set_claude_default,
+            reset_claude_default,
+            remove_claude_provider,
+            backup_claude_config,
+            list_claude_backups,
+            restore_claude_config,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn settings_with_user_keys() -> serde_json::Value {
+        // Mimics a real ~/.claude/settings.json that already has user prefs.
+        serde_json::json!({
+            "model": "opus",
+            "enabledPlugins": { "typescript-lsp@claude-plugins-official": true },
+            "effortLevel": "high",
+            "remoteControlAtStartup": false,
+            "agentPushNotifEnabled": true
+        })
+    }
+
+    fn provider(auth_type: &str) -> ClaudeProvider {
+        ClaudeProvider {
+            id: "litellm".to_string(),
+            name: "LiteLLM Proxy".to_string(),
+            base_url: "http://localhost:4000".to_string(),
+            model: "claude-sonnet-4-20250514".to_string(),
+            auth_type: auth_type.to_string(),
+            api_key: "sk-test-123".to_string(),
+        }
+    }
+
+    #[test]
+    fn apply_auth_token_writes_bearer_and_preserves_user_keys() {
+        let mut s = settings_with_user_keys();
+        apply_provider_to_settings(&mut s, &provider("auth_token")).unwrap();
+
+        let env = s.get("env").unwrap().as_object().unwrap();
+        assert_eq!(env.get("ANTHROPIC_BASE_URL").unwrap(), "http://localhost:4000");
+        assert_eq!(env.get("ANTHROPIC_MODEL").unwrap(), "claude-sonnet-4-20250514");
+        assert_eq!(env.get("ANTHROPIC_AUTH_TOKEN").unwrap(), "sk-test-123");
+        assert!(env.get("ANTHROPIC_API_KEY").is_none(), "api_key must be absent when auth_type=auth_token");
+
+        // User's existing top-level keys must survive.
+        assert_eq!(s.get("model").unwrap(), "opus");
+        assert_eq!(s.get("effortLevel").unwrap(), "high");
+        assert!(s.get("enabledPlugins").unwrap().is_object());
+    }
+
+    #[test]
+    fn apply_api_key_writes_xapikey_and_removes_token() {
+        let mut s = settings_with_user_keys();
+        // Pre-existing stale token should be cleared when switching to api_key.
+        {
+            let env = s.as_object_mut().unwrap()
+                .entry("env".to_string()).or_insert_with(|| serde_json::json!({}))
+                .as_object_mut().unwrap();
+            env.insert("ANTHROPIC_AUTH_TOKEN".to_string(), serde_json::json!("stale"));
+        }
+        apply_provider_to_settings(&mut s, &provider("api_key")).unwrap();
+
+        let env = s.get("env").unwrap().as_object().unwrap();
+        assert_eq!(env.get("ANTHROPIC_API_KEY").unwrap(), "sk-test-123");
+        assert!(env.get("ANTHROPIC_AUTH_TOKEN").is_none(), "auth_token must be cleared when auth_type=api_key");
+    }
+
+    #[test]
+    fn reset_removes_only_anthropic_vars_and_keeps_other_env() {
+        let mut s = settings_with_user_keys();
+        apply_provider_to_settings(&mut s, &provider("auth_token")).unwrap();
+        // Add an unrelated env var the user set themselves.
+        {
+            let env = s.get_mut("env").unwrap().as_object_mut().unwrap();
+            env.insert("OTEL_METRICS_EXPORTER".to_string(), serde_json::json!("otlp"));
+        }
+
+        reset_claude_env_in_settings(&mut s).unwrap();
+
+        let env = s.get("env").unwrap().as_object().unwrap();
+        assert!(env.get("ANTHROPIC_BASE_URL").is_none());
+        assert!(env.get("ANTHROPIC_MODEL").is_none());
+        assert!(env.get("ANTHROPIC_AUTH_TOKEN").is_none());
+        assert!(env.get("ANTHROPIC_API_KEY").is_none());
+        assert_eq!(env.get("OTEL_METRICS_EXPORTER").unwrap(), "otlp", "unrelated env vars must be preserved");
+        assert_eq!(s.get("model").unwrap(), "opus", "user settings must be preserved");
+    }
+
+    #[test]
+    fn apply_then_reset_roundtrips_to_original_user_keys() {
+        let original = settings_with_user_keys();
+        let mut s = original.clone();
+        apply_provider_to_settings(&mut s, &provider("auth_token")).unwrap();
+        reset_claude_env_in_settings(&mut s).unwrap();
+
+        // Every original top-level key is still present with the same value.
+        for (k, v) in original.as_object().unwrap() {
+            assert_eq!(s.get(k).unwrap(), v, "key {} changed after roundtrip", k);
+        }
+    }
+
+    #[test]
+    fn apply_preserves_top_level_key_order() {
+        let mut s = settings_with_user_keys();
+        let before: Vec<String> = s.as_object().unwrap().keys().cloned().collect();
+        apply_provider_to_settings(&mut s, &provider("auth_token")).unwrap();
+        reset_claude_env_in_settings(&mut s).unwrap();
+        let after: Vec<String> = s.as_object().unwrap().keys().cloned().collect();
+        // The user's original keys must remain in the same relative order.
+        // `env` may be newly inserted (appended) by apply, which is fine.
+        let after_user_only: Vec<&String> = after.iter().filter(|k| before.contains(k)).collect();
+        let before_refs: Vec<&String> = before.iter().collect();
+        assert_eq!(after_user_only, before_refs, "top-level user key order must be preserved (preserve_order feature)");
+    }
 }
