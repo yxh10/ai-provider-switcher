@@ -65,15 +65,13 @@ correct base URL, model, env var name, and wire API for known providers:
 | Preset | Base URL | Wire API | Env Var |
 | --- | --- | --- | --- |
 | HuoShan GLM 5.2 | `https://ark.cn-beijing.volces.com/api/coding/v3` | `responses` | `HUOSHAN_API_KEY` |
-| OpenCode Go | `https://opencode.ai/zen/go/v1` | `chat` | `OPENCODE_GO_API_KEY` |
+| OpenCode Go | `https://opencode.ai/zen/go/v1` | `responses` | `OPENCODE_GO_API_KEY` |
 
 Pick a preset and all fields fill in automatically — you just enter your API
 key. You can still edit any field after selecting a preset.
 
-> **Important:** OpenCode Go uses the **Chat Completions** wire API, not the
-> Responses API. The preset handles this for you. If you add OpenCode Go
-> manually, make sure to select "Chat Completions" — otherwise Codex will hit
-> a 404.
+> **Note:** Codex now only supports the **Responses API** (`wire_api = "responses"`).
+> The Chat Completions wire API is no longer supported.
 
 ## Claude Code support (desktop app)
 

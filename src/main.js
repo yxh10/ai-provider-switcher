@@ -6,7 +6,7 @@ const { invoke } = window.__TAURI__.core;
 
 const CODEX_PRESETS = [
   { id: "huoshan", name: "HuoShan GLM 5.2", baseUrl: "https://ark.cn-beijing.volces.com/api/coding/v3", model: "glm-latest", envKey: "HUOSHAN_API_KEY", wireApi: "responses" },
-  { id: "opencode-go", name: "OpenCode Go", baseUrl: "https://opencode.ai/zen/go/v1", model: "glm-5.2", envKey: "OPENCODE_GO_API_KEY", wireApi: "chat" },
+  { id: "opencode-go", name: "OpenCode Go", baseUrl: "https://opencode.ai/zen/go/v1", model: "glm-5.2", envKey: "OPENCODE_GO_API_KEY", wireApi: "responses" },
 ];
 
 const CLAUDE_PRESETS = [
@@ -351,9 +351,9 @@ function editFormHTML(p, isEdit, isClone) {
         <div class="form-group">
           <label class="form-label">Wire API</label>
           <select class="form-select" id="formWireApi">
-            <option value="responses" ${p.wire_api === "responses" ? "selected" : ""}>Responses API</option>
-            <option value="chat" ${p.wire_api === "chat" ? "selected" : ""}>Chat Completions</option>
+            <option value="responses" selected>Responses API</option>
           </select>
+          <div class="form-hint">Codex only supports the <strong>Responses API</strong> (<code>wire_api = "responses"</code>).</div>
         </div>`;
 
   const envKeyBlock = isClaude ? "" : `

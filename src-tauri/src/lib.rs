@@ -1202,7 +1202,7 @@ model = "glm-latest"
 name = "OpenCode Go"
 base_url = "https://opencode.ai/zen/go/v1"
 env_key = "OPENCODE_GO_API_KEY"
-wire_api = "chat"
+wire_api = "responses"
 model = "glm-5.2"
 "#,
         )

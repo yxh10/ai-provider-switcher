@@ -256,8 +256,8 @@ const PROVIDER_PRESETS = [
     value: { id: "huoshan", name: "HuoShan GLM 5.2", baseUrl: "https://ark.cn-beijing.volces.com/api/coding/v3", model: "glm-latest", envKey: "HUOSHAN_API_KEY", wireApi: "responses" },
   },
   {
-    title: "OpenCode Go — glm-5.2 (Chat Completions)",
-    value: { id: "opencode-go", name: "OpenCode Go", baseUrl: "https://opencode.ai/zen/go/v1", model: "glm-5.2", envKey: "OPENCODE_GO_API_KEY", wireApi: "chat" },
+    title: "OpenCode Go — glm-5.2 (Responses API)",
+    value: { id: "opencode-go", name: "OpenCode Go", baseUrl: "https://opencode.ai/zen/go/v1", model: "glm-5.2", envKey: "OPENCODE_GO_API_KEY", wireApi: "responses" },
   },
 ];
 
@@ -284,10 +284,9 @@ async function cmdAdd() {
       name: "wireApi",
       message: "Wire API",
       choices: [
-        { title: "Responses API (recommended for Codex)", value: "responses" },
-        { title: "Chat Completions API", value: "chat" },
+        { title: "Responses API (only supported value)", value: "responses" },
       ],
-      initial: preset ? (preset.wireApi === "chat" ? 1 : 0) : 0,
+      initial: 0,
     },
     {
       type: "confirm",
