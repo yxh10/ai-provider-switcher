@@ -77,6 +77,110 @@ fn write_config_toml(config: &toml::Value) -> Result<(), String> {
     Ok(())
 }
 
+// ─── Codex app-owned sidecar ──────────────────────────────────────────────
+// The per-provider `model` is app metadata, NOT a Codex-native field of
+// `[model_providers.*]` (Codex's schema there is name/base_url/env_key/wire_api).
+// We store it in a sidecar JSON file so config.toml stays limited to fields Codex
+// actually understands. This mirrors how Claude Code keeps app metadata in
+// ~/.claude/provider-switcher.json and only writes ANTHROPIC_* env vars into
+// settings.json — so resetting to the built-in default never leaves app-only
+// pollution behind in the agent's native config.
+fn codex_store_path() -> PathBuf {
+    codex_dir().join("provider-switcher.json")
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct CodexProviderMeta {
+    #[serde(default)]
+    pub model: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct CodexStore {
+    #[serde(default)]
+    pub providers: std::collections::BTreeMap<String, CodexProviderMeta>,
+}
+
+fn read_codex_store() -> Result<CodexStore, String> {
+    let path = codex_store_path();
+    if !path.exists() {
+        return Ok(CodexStore::default());
+    }
+    let content = fs::read_to_string(&path)
+        .map_err(|e| format!("Failed to read provider-switcher.json: {}", e))?;
+    if content.trim().is_empty() {
+        return Ok(CodexStore::default());
+    }
+    serde_json::from_str(&content)
+        .map_err(|e| format!("Failed to parse provider-switcher.json: {}", e))
+}
+
+fn write_codex_store(store: &CodexStore) -> Result<(), String> {
+    let dir = codex_dir();
+    fs::create_dir_all(&dir).map_err(|e| format!("Cannot create .codex dir: {}", e))?;
+    let path = codex_store_path();
+    if path.exists() {
+        let bak = format!("{}.bak.{}", path.display(), timestamp());
+        let _ = fs::copy(&path, &bak);
+    }
+    let mut content = serde_json::to_string_pretty(store)
+        .map_err(|e| format!("Failed to serialize provider-switcher.json: {}", e))?;
+    if !content.ends_with('\n') {
+        content.push('\n');
+    }
+    fs::write(&path, &content)
+        .map_err(|e| format!("Failed to write provider-switcher.json: {}", e))?;
+    set_file_perms_600(&path);
+    Ok(())
+}
+
+/// Pure core of the migration: given a parsed config.toml and the current sidecar,
+/// move any `model = "..."` from `[model_providers.*]` into the sidecar and strip
+/// it from config.toml. Returns the updated (config, store, changed). This is the
+/// testable part — the file-backed wrapper below handles I/O.
+fn migrate_codex_provider_models_into(
+    mut config: toml::Value,
+    mut store: CodexStore,
+) -> (toml::Value, CodexStore, bool) {
+    let mut changed = false;
+    let root = match config.as_table_mut() {
+        Some(t) => t,
+        None => return (config, store, changed),
+    };
+
+    if let Some(toml::Value::Table(providers_table)) = root.get_mut("model_providers") {
+        for (id, val) in providers_table.iter_mut() {
+            if let toml::Value::Table(pt) = val {
+                if let Some(toml::Value::String(model)) = pt.remove("model") {
+                    let meta = store
+                        .providers
+                        .entry(id.clone())
+                        .or_default();
+                    meta.model = model;
+                    changed = true;
+                }
+            }
+        }
+    }
+
+    (config, store, changed)
+}
+
+/// Move any `model = "..."` field from `[model_providers.X]` tables in config.toml
+/// into the sidecar, and strip it from config.toml. Idempotent: a no-op once
+/// migration has run. Keeps config.toml limited to Codex-native fields so that
+/// `reset_to_default` leaves no app-only metadata behind.
+fn migrate_codex_provider_models() -> Result<(), String> {
+    let config = read_config_toml()?;
+    let store = read_codex_store()?;
+    let (config, store, changed) = migrate_codex_provider_models_into(config, store);
+    if changed {
+        write_config_toml(&config)?;
+        write_codex_store(&store)?;
+    }
+    Ok(())
+}
+
 fn ensure_table<'a>(root: &'a mut toml::value::Table, key: &str) -> Result<&'a mut toml::value::Table, String> {
     if !root.contains_key(key) {
         root.insert(key.to_string(), toml::Value::Table(toml::value::Table::new()));
@@ -138,6 +242,7 @@ fn is_env_key_set(env_key: &str) -> bool {
 
 #[tauri::command]
 fn get_config() -> Result<ConfigSnapshot, String> {
+    migrate_codex_provider_models()?;
     let config = read_config_toml()?;
     let root = config.as_table().ok_or("Config root is not a table")?;
 
@@ -151,6 +256,8 @@ fn get_config() -> Result<ConfigSnapshot, String> {
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
 
+    let store = read_codex_store()?;
+
     let mut providers = Vec::new();
 
     if let Some(toml::Value::Table(providers_table)) = root.get("model_providers") {
@@ -162,6 +269,14 @@ fn get_config() -> Result<ConfigSnapshot, String> {
                     .unwrap_or("")
                     .to_string();
                 let is_env_set = is_env_key_set(&env_key);
+
+                // Per-provider model lives in the sidecar (app metadata), not in
+                // config.toml's `[model_providers.*]` table.
+                let model = store
+                    .providers
+                    .get(id)
+                    .map(|m| m.model.clone())
+                    .unwrap_or_default();
 
                 providers.push(ProviderInfo {
                     id: id.clone(),
@@ -175,11 +290,7 @@ fn get_config() -> Result<ConfigSnapshot, String> {
                         .and_then(|v| v.as_str())
                         .unwrap_or("")
                         .to_string(),
-                    model: pt
-                        .get("model")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string(),
+                    model,
                     env_key: env_key.clone(),
                     wire_api: pt
                         .get("wire_api")
@@ -218,25 +329,36 @@ struct SaveProviderInput {
 
 #[tauri::command]
 fn save_provider(input: SaveProviderInput) -> Result<(), String> {
+    migrate_codex_provider_models()?;
     let mut config = read_config_toml()?;
     let root = config.as_table_mut().ok_or("Config root is not a table")?;
 
     let providers_table = ensure_table(root, "model_providers")?;
 
+    // Codex-native fields only — `model` is NOT part of `[model_providers.*]`
+    // and is stored in the sidecar below.
     let mut pt = toml::value::Table::new();
     pt.insert("name".to_string(), toml::Value::String(input.name));
     pt.insert("base_url".to_string(), toml::Value::String(input.base_url));
-    pt.insert("model".to_string(), toml::Value::String(input.model.clone()));
     pt.insert("env_key".to_string(), toml::Value::String(input.env_key.clone()));
     pt.insert("wire_api".to_string(), toml::Value::String(input.wire_api));
     providers_table.insert(input.id.clone(), toml::Value::Table(pt));
 
     if input.set_as_default {
         root.insert("model_provider".to_string(), toml::Value::String(input.id.clone()));
-        root.insert("model".to_string(), toml::Value::String(input.model));
+        root.insert("model".to_string(), toml::Value::String(input.model.clone()));
     }
 
     write_config_toml(&config)?;
+
+    // Persist the per-provider model in the app-owned sidecar.
+    let mut store = read_codex_store()?;
+    let meta = store
+        .providers
+        .entry(input.id.clone())
+        .or_default();
+    meta.model = input.model.clone();
+    write_codex_store(&store)?;
 
     if !input.api_key.is_empty() {
         set_env_var(input.env_key, input.api_key)?;
@@ -253,6 +375,7 @@ struct SetDefaultInput {
 
 #[tauri::command]
 fn set_default(input: SetDefaultInput) -> Result<(), String> {
+    migrate_codex_provider_models()?;
     let mut config = read_config_toml()?;
     let root = config.as_table_mut().ok_or("Config root is not a table")?;
 
@@ -261,20 +384,22 @@ fn set_default(input: SetDefaultInput) -> Result<(), String> {
         .and_then(|v| v.as_table())
         .ok_or("No providers configured")?;
 
-    let pt = providers_table
-        .get(&input.provider_id)
-        .and_then(|v| v.as_table())
-        .ok_or(format!("Unknown provider: {}", input.provider_id))?;
+    if !providers_table.contains_key(&input.provider_id) {
+        return Err(format!("Unknown provider: {}", input.provider_id));
+    }
 
-    let model = pt
-        .get("model")
-        .and_then(|v| v.as_str())
+    // Per-provider model is app metadata stored in the sidecar, not in
+    // `[model_providers.*]`.
+    let store = read_codex_store()?;
+    let model = store
+        .providers
+        .get(&input.provider_id)
+        .map(|m| m.model.clone())
+        .filter(|s| !s.is_empty())
         .ok_or(format!(
-            "No model configured for provider: {}",
+            "No model saved for provider: {}. Edit the provider in the app to set a model.",
             input.provider_id
         ))?;
-
-    let model = model.to_string();
 
     root.insert(
         "model_provider".to_string(),
@@ -288,6 +413,7 @@ fn set_default(input: SetDefaultInput) -> Result<(), String> {
 
 #[tauri::command]
 fn reset_to_default() -> Result<(), String> {
+    migrate_codex_provider_models()?;
     let mut config = read_config_toml()?;
     let root = config.as_table_mut().ok_or("Config root is not a table")?;
 
@@ -300,6 +426,7 @@ fn reset_to_default() -> Result<(), String> {
 
 #[tauri::command]
 fn remove_provider(provider_id: String) -> Result<(), String> {
+    migrate_codex_provider_models()?;
     let mut config = read_config_toml()?;
     let root = config.as_table_mut().ok_or("Config root is not a table")?;
 
@@ -317,6 +444,12 @@ fn remove_provider(provider_id: String) -> Result<(), String> {
     }
 
     write_config_toml(&config)?;
+
+    // Also drop the per-provider model from the sidecar.
+    let mut store = read_codex_store()?;
+    store.providers.remove(&provider_id);
+    write_codex_store(&store)?;
+
     Ok(())
 }
 
@@ -428,8 +561,17 @@ fn backup_config() -> Result<String, String> {
     if !path.exists() {
         return Err("No config.toml exists yet".to_string());
     }
-    let bak = format!("{}.bak.{}", path.display(), timestamp());
+    let ts = timestamp();
+    let bak = format!("{}.bak.{}", path.display(), ts);
     fs::copy(&path, &bak).map_err(|e| format!("Backup failed: {}", e))?;
+
+    // Also back up the sidecar so a restore brings back per-provider models.
+    let store = codex_store_path();
+    if store.exists() {
+        let store_bak = format!("{}.bak.{}", store.display(), ts);
+        let _ = fs::copy(&store, &store_bak);
+    }
+
     Ok(bak)
 }
 
@@ -472,6 +614,26 @@ fn restore_config(filename: String) -> Result<(), String> {
 
     fs::copy(&backup_path, &current)
         .map_err(|e| format!("Restore failed: {}", e))?;
+
+    // Restore the matching sidecar backup (same timestamp), if present.
+    if let Some(ts) = filename.strip_prefix("config.toml.bak.") {
+        let store = codex_store_path();
+        let store_bak = dir.join(format!("provider-switcher.json.bak.{}", ts));
+        if store_bak.exists() {
+            if store.exists() {
+                let cur_bak = format!("{}.bak.{}", store.display(), timestamp());
+                let _ = fs::copy(&store, &cur_bak);
+            }
+            fs::copy(&store_bak, &store)
+                .map_err(|e| format!("Restore sidecar failed: {}", e))?;
+            set_file_perms_600(&store);
+        }
+    }
+
+    // A restored pre-migration backup may carry `model = "..."` inside
+    // `[model_providers.*]`; migrate it into the sidecar so config.toml stays clean.
+    migrate_codex_provider_models()?;
+
     Ok(())
 }
 
@@ -1014,5 +1176,158 @@ mod tests {
         let after_user_only: Vec<&String> = after.iter().filter(|k| before.contains(k)).collect();
         let before_refs: Vec<&String> = before.iter().collect();
         assert_eq!(after_user_only, before_refs, "top-level user key order must be preserved (preserve_order feature)");
+    }
+
+    // ─── Codex sidecar migration tests ────────────────────────────────────
+    // These verify the fix for the bug where `model = "..."` was written inside
+    // `[model_providers.*]` (non-standard for Codex) and left behind after
+    // `reset_to_default`. Migration lifts it into the app-owned sidecar so
+    // config.toml stays limited to Codex-native fields.
+
+    fn codex_config_with_legacy_model() -> toml::Value {
+        // Mimics a pre-fix config.toml: `model` inside [model_providers.*].
+        toml::from_str(
+            r#"
+model_provider = "huoshan"
+model = "glm-latest"
+
+[model_providers.huoshan]
+name = "HuoShan GLM 5.2"
+base_url = "https://ark.cn-beijing.volces.com/api/coding/v3"
+env_key = "HUOSHAN_API_KEY"
+wire_api = "responses"
+model = "glm-latest"
+
+[model_providers.opencode-go]
+name = "OpenCode Go"
+base_url = "https://opencode.ai/zen/go/v1"
+env_key = "OPENCODE_GO_API_KEY"
+wire_api = "chat"
+model = "glm-5.2"
+"#,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn migrate_moves_per_provider_model_into_sidecar() {
+        let config = codex_config_with_legacy_model();
+        let store = CodexStore::default();
+
+        let (new_config, new_store, changed) =
+            migrate_codex_provider_models_into(config, store);
+
+        assert!(changed, "migration should report changes");
+
+        // config.toml: no `model` inside [model_providers.*] anymore.
+        let providers = new_config
+            .get("model_providers")
+            .and_then(|v| v.as_table())
+            .unwrap();
+        for (_id, pt) in providers {
+            assert!(
+                pt.get("model").is_none(),
+                "per-provider `model` must be stripped from config.toml"
+            );
+            // Codex-native fields must survive.
+            assert!(pt.get("name").is_some());
+            assert!(pt.get("base_url").is_some());
+            assert!(pt.get("env_key").is_some());
+            assert!(pt.get("wire_api").is_some());
+        }
+
+        // sidecar: per-provider model now lives here.
+        assert_eq!(new_store.providers.get("huoshan").unwrap().model, "glm-latest");
+        assert_eq!(new_store.providers.get("opencode-go").unwrap().model, "glm-5.2");
+    }
+
+    #[test]
+    fn migrate_preserves_top_level_model_and_provider() {
+        let config = codex_config_with_legacy_model();
+        let (new_config, _store, _changed) =
+            migrate_codex_provider_models_into(config, CodexStore::default());
+
+        // Top-level model/model_provider are the active-provider selectors and
+        // must NOT be touched by migration (reset_to_default handles those).
+        assert_eq!(
+            new_config.get("model_provider").and_then(|v| v.as_str()),
+            Some("huoshan")
+        );
+        assert_eq!(
+            new_config.get("model").and_then(|v| v.as_str()),
+            Some("glm-latest")
+        );
+    }
+
+    #[test]
+    fn migrate_is_idempotent() {
+        let config = codex_config_with_legacy_model();
+        let (config, store, _) =
+            migrate_codex_provider_models_into(config, CodexStore::default());
+
+        // Second run: nothing left to move.
+        let (config2, store2, changed2) =
+            migrate_codex_provider_models_into(config, store);
+
+        assert!(!changed2, "second migration must be a no-op");
+        assert_eq!(store2.providers.len(), 2);
+        // Still no `model` inside [model_providers.*].
+        let providers = config2.get("model_providers").and_then(|v| v.as_table()).unwrap();
+        for (_id, pt) in providers {
+            assert!(pt.get("model").is_none());
+        }
+    }
+
+    #[test]
+    fn migrate_on_clean_config_is_noop() {
+        // A clean (post-fix) config has no `model` inside [model_providers.*].
+        let config: toml::Value = toml::from_str(
+            r#"
+[model_providers.huoshan]
+name = "HuoShan GLM 5.2"
+base_url = "https://ark.cn-beijing.volces.com/api/coding/v3"
+env_key = "HUOSHAN_API_KEY"
+wire_api = "responses"
+"#,
+        )
+        .unwrap();
+        let store = CodexStore::default();
+        let (_config, _store, changed) =
+            migrate_codex_provider_models_into(config, store);
+        assert!(!changed, "clean config must not trigger migration writes");
+    }
+
+    #[test]
+    fn migrate_does_not_overwrite_existing_sidecar_model_when_no_legacy_field() {
+        // If config.toml has no `model` inside [model_providers.*] but the sidecar
+        // already has a model (post-migration state), migration must be a no-op
+        // and must not clobber the sidecar.
+        let config: toml::Value = toml::from_str(
+            r#"
+[model_providers.huoshan]
+name = "HuoShan GLM 5.2"
+base_url = "https://ark.cn-beijing.volces.com/api/coding/v3"
+env_key = "HUOSHAN_API_KEY"
+wire_api = "responses"
+"#,
+        )
+        .unwrap();
+        let mut store = CodexStore::default();
+        store.providers.insert(
+            "huoshan".to_string(),
+            CodexProviderMeta { model: "glm-latest".to_string() },
+        );
+        let (_config, new_store, changed) =
+            migrate_codex_provider_models_into(config, store);
+        assert!(!changed);
+        assert_eq!(new_store.providers.get("huoshan").unwrap().model, "glm-latest");
+    }
+
+    #[test]
+    fn migrate_handles_empty_config() {
+        let config = toml::Value::Table(toml::value::Table::new());
+        let (_config, _store, changed) =
+            migrate_codex_provider_models_into(config, CodexStore::default());
+        assert!(!changed, "empty config must not trigger migration writes");
     }
 }

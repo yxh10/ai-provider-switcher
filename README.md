@@ -11,7 +11,7 @@ persists across restarts.
 
 | Target | Config location | Provider store | API keys |
 | --- | --- | --- | --- |
-| **Codex** | `~/.codex/config.toml` | `[model_providers.*]` in config.toml | Shell rc (`~/.zshrc`, `setx` on Windows) |
+| **Codex** | `~/.codex/config.toml` | `[model_providers.*]` in config.toml (Codex-native: name/base_url/env_key/wire_api) + `~/.codex/provider-switcher.json` for per-provider `model` | Shell rc (`~/.zshrc`, `setx` on Windows) |
 | **Claude Code** | `~/.claude/settings.json` (`env` key) | `~/.claude/provider-switcher.json` | Written into `settings.json` `env` when active |
 
 API keys are never written into Codex's `config.toml`. For Claude Code, the
@@ -19,6 +19,16 @@ active provider's key lives in `~/.claude/settings.json` under `env` (the
 documented Claude Code mechanism, read at startup regardless of how `claude` is
 launched — CLI or desktop app). The full set of saved providers is kept in a
 separate `provider-switcher.json` so you can switch between them.
+
+> **Why a sidecar for Codex?** Codex's `[model_providers.*]` schema only knows
+> `name` / `base_url` / `env_key` / `wire_api`. The per-provider `model` is
+> app-only metadata (used to recall which model each saved provider uses), so it
+> lives in `~/.codex/provider-switcher.json` rather than polluting `config.toml`.
+> Switching back to the built-in default removes the top-level `model` /
+> `model_provider` from `config.toml` and leaves it containing only Codex-native
+> fields — no app-only leftovers. On first run after upgrading, any existing
+> `model = "..."` inside `[model_providers.*]` is automatically migrated into the
+> sidecar and stripped from `config.toml`.
 
 ## Install
 
@@ -167,6 +177,8 @@ cpm use openrouter anthropic/claude-sonnet-4
   your terminal after setting a key.
 - **macOS:** after `cpm add`, run `source ~/.zshrc` (or open a new terminal) so
   the key is available, then restart Codex Desktop.
-- Every write creates a timestamped backup: `config.toml.bak.*` in `~/.codex`
-  (Codex) and `settings.json.bak.*` / `provider-switcher.json.bak.*` in
-  `~/.claude` (Claude Code).
+- Every write creates a timestamped backup: `config.toml.bak.*` **and**
+  `provider-switcher.json.bak.*` in `~/.codex` (Codex) and `settings.json.bak.*`
+  / `provider-switcher.json.bak.*` in `~/.claude` (Claude Code). Restoring a
+  Codex backup brings back both files (matched by timestamp) and re-runs
+  migration so a restored pre-sidecar backup is cleaned up automatically.

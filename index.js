@@ -19,6 +19,84 @@ function codexDir() {
 function configPath() {
   return path.join(codexDir(), "config.toml");
 }
+function codexStorePath() {
+  return path.join(codexDir(), "provider-switcher.json");
+}
+
+// App-owned sidecar that holds the per-provider `model` (app metadata that is NOT
+// part of Codex's native `[model_providers.*]` schema). Mirrors the Tauri backend
+// so config.toml stays limited to Codex-native fields.
+function readCodexStore() {
+  const p = codexStorePath();
+  if (!fs.existsSync(p)) return { providers: {} };
+  try {
+    const raw = fs.readFileSync(p, "utf8").trim();
+    if (!raw) return { providers: {} };
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || !parsed.providers) {
+      return { providers: {} };
+    }
+    return { providers: parsed.providers };
+  } catch {
+    return { providers: {} };
+  }
+}
+
+function writeCodexStore(store) {
+  ensureConfigFile();
+  const p = codexStorePath();
+  if (fs.existsSync(p)) {
+    const bak = `${p}.bak.${Date.now()}`;
+    fs.copyFileSync(p, bak);
+  }
+  fs.writeFileSync(p, JSON.stringify(store, null, 2) + "\n");
+  if (!IS_WIN) fs.chmodSync(p, 0o600);
+}
+
+function setCodexProviderModel(providerId, model) {
+  const store = readCodexStore();
+  const meta = store.providers[providerId] || {};
+  meta.model = model;
+  store.providers[providerId] = meta;
+  writeCodexStore(store);
+}
+
+function removeCodexProviderModel(providerId) {
+  const store = readCodexStore();
+  if (store.providers[providerId]) {
+    delete store.providers[providerId];
+    writeCodexStore(store);
+  }
+}
+
+function getCodexProviderModel(providerId) {
+  const store = readCodexStore();
+  const meta = store.providers[providerId];
+  return meta && meta.model ? meta.model : null;
+}
+
+// One-time migration: lift any `model = "..."` field from `[model_providers.*]`
+// in config.toml into the sidecar and strip it from config.toml. Idempotent.
+function migrateCodexProviderModels() {
+  const config = readConfig();
+  if (!config.model_providers) return;
+  let changed = false;
+  const store = readCodexStore();
+  for (const id of Object.keys(config.model_providers)) {
+    const pt = config.model_providers[id];
+    if (pt && Object.prototype.hasOwnProperty.call(pt, "model")) {
+      const meta = store.providers[id] || {};
+      meta.model = String(pt.model);
+      store.providers[id] = meta;
+      delete pt.model;
+      changed = true;
+    }
+  }
+  if (changed) {
+    writeConfig(config);
+    writeCodexStore(store);
+  }
+}
 
 function ensureConfigFile() {
   const dir = codexDir();
@@ -43,8 +121,13 @@ function readConfig() {
 function backupConfig() {
   const cfg = configPath();
   if (!fs.existsSync(cfg)) return null;
-  const bak = `${cfg}.bak.${Date.now()}`;
+  const ts = Date.now();
+  const bak = `${cfg}.bak.${ts}`;
   fs.copyFileSync(cfg, bak);
+  const store = codexStorePath();
+  if (fs.existsSync(store)) {
+    fs.copyFileSync(store, `${store}.bak.${ts}`);
+  }
   return bak;
 }
 
@@ -216,6 +299,7 @@ async function cmdAdd() {
 
   if (!answers.providerId) return;
 
+  migrateCodexProviderModels();
   const config = readConfig();
   config.model_providers = config.model_providers || {};
   config.model_providers[answers.providerId] = {
@@ -231,6 +315,7 @@ async function cmdAdd() {
   }
 
   writeConfig(config);
+  setCodexProviderModel(answers.providerId, answers.model);
 
   if (answers.apiKey) {
     setUserEnv(answers.envKey, answers.apiKey);
@@ -270,6 +355,7 @@ function cmdList() {
 }
 
 async function cmdUse(providerArg, modelArg) {
+  migrateCodexProviderModels();
   const config = readConfig();
   const providers = getProviders(config);
   const ids = Object.keys(providers);
@@ -302,11 +388,12 @@ async function cmdUse(providerArg, modelArg) {
   }
 
   if (!model) {
+    const savedModel = getCodexProviderModel(providerId);
     const m = await prompts({
       type: "text",
       name: "value",
       message: "Default model",
-      initial: config.model || "",
+      initial: savedModel || config.model || "",
     });
     model = m && m.value;
   }
@@ -319,11 +406,13 @@ async function cmdUse(providerArg, modelArg) {
   config.model_provider = providerId;
   config.model = model;
   writeConfig(config);
+  setCodexProviderModel(providerId, model);
   console.log(green(`Default set to ${providerId} / ${model}`));
   console.log(dim("Restart Codex Desktop to apply."));
 }
 
 async function cmdRemove(providerArg) {
+  migrateCodexProviderModels();
   const config = readConfig();
   const providers = getProviders(config);
   const ids = Object.keys(providers);
@@ -366,6 +455,7 @@ async function cmdRemove(providerArg) {
     delete config.model;
   }
   writeConfig(config);
+  removeCodexProviderModel(providerId);
   console.log(green(`Removed ${providerId}.`));
 }
 
@@ -411,6 +501,20 @@ async function cmdRestore() {
   if (!choice.file) return;
   backupConfig();
   fs.copyFileSync(path.join(codexDir(), choice.file), configPath());
+
+  // Restore the matching sidecar backup (same timestamp), if present.
+  const ts = choice.file.replace(/^config\.toml\.bak\./, "");
+  const store = codexStorePath();
+  const storeBak = path.join(codexDir(), `provider-switcher.json.bak.${ts}`);
+  if (fs.existsSync(storeBak)) {
+    fs.copyFileSync(storeBak, store);
+    if (!IS_WIN) fs.chmodSync(store, 0o600);
+  }
+
+  // A restored pre-migration backup may carry `model = "..."` inside
+  // `[model_providers.*]`; migrate it into the sidecar so config.toml stays clean.
+  migrateCodexProviderModels();
+
   console.log(green(`Restored from ${choice.file}`));
 }
 
@@ -476,6 +580,7 @@ module.exports = {
   homeDir,
   codexDir,
   configPath,
+  codexStorePath,
   readConfig,
   writeConfig,
   serializeConfig,
@@ -484,6 +589,12 @@ module.exports = {
   setUserEnv,
   pickRcFile,
   isEnvVarSet,
+  readCodexStore,
+  writeCodexStore,
+  setCodexProviderModel,
+  removeCodexProviderModel,
+  getCodexProviderModel,
+  migrateCodexProviderModels,
 };
 
 if (require.main === module) {
