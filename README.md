@@ -66,6 +66,7 @@ correct base URL, model, env var name, and wire API for known providers:
 | --- | --- | --- | --- |
 | HuoShan GLM 5.2 | `https://ark.cn-beijing.volces.com/api/coding/v3` | `responses` | `HUOSHAN_API_KEY` |
 | OpenCode Go | `https://opencode.ai/zen/go/v1` | `responses` | `OPENCODE_GO_API_KEY` |
+| Prism API | `https://sub2api.558686.xyz/v1` | `responses` | `PRISM_API_KEY` |
 
 Pick a preset and all fields fill in automatically — you just enter your API
 key. You can still edit any field after selecting a preset.

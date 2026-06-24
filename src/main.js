@@ -7,6 +7,7 @@ const { invoke } = window.__TAURI__.core;
 const CODEX_PRESETS = [
   { id: "huoshan", name: "HuoShan GLM 5.2", baseUrl: "https://ark.cn-beijing.volces.com/api/coding/v3", model: "glm-latest", envKey: "HUOSHAN_API_KEY", wireApi: "responses" },
   { id: "opencode-go", name: "OpenCode Go", baseUrl: "https://opencode.ai/zen/go/v1", model: "glm-5.2", envKey: "OPENCODE_GO_API_KEY", wireApi: "responses" },
+  { id: "prism-api", name: "Prism API", baseUrl: "https://sub2api.558686.xyz/v1", model: "gpt-5.5", envKey: "PRISM_API_KEY", wireApi: "responses" },
 ];
 
 const CLAUDE_PRESETS = [

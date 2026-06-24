@@ -259,6 +259,10 @@ const PROVIDER_PRESETS = [
     title: "OpenCode Go — glm-5.2 (Responses API)",
     value: { id: "opencode-go", name: "OpenCode Go", baseUrl: "https://opencode.ai/zen/go/v1", model: "glm-5.2", envKey: "OPENCODE_GO_API_KEY", wireApi: "responses" },
   },
+  {
+    title: "Prism API - GPT-5.5 (Responses API)",
+    value: { id: "prism-api", name: "Prism API", baseUrl: "https://sub2api.558686.xyz/v1", model: "gpt-5.5", envKey: "PRISM_API_KEY", wireApi: "responses" },
+  },
 ];
 
 async function cmdAdd() {
